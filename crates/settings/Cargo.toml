@@ -1,0 +1,11 @@
+[package]
+name = "coast-settings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+toml.workspace = true
+coast-themes = { path = "../themes" }

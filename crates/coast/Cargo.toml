@@ -1,0 +1,17 @@
+[package]
+name = "coast"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "coast"
+path = "src/main.rs"
+
+[dependencies]
+gpui = { version = "0.2.2", default-features = false, features = ["font-kit"] }
+alacritty_terminal = "0.26"
+terminal-core = { path = "../terminal-core" }
+coast-themes = { path = "../themes" }
+coast-settings = { path = "../settings" }
+anyhow.workspace = true
