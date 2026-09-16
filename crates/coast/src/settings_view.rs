@@ -56,6 +56,98 @@ struct Nav<'a> {
     prev: &'a FocusHandle,
 }
 
+/// Every focusable control on the settings page, in Tab order. This is the
+/// single source of truth `next`/`prev` are derived from — adding,
+/// removing, or reordering a control means editing `ORDER` once, instead
+/// of hand-editing the two neighboring controls' `Nav` (which is exactly
+/// the kind of edit that's easy to get wrong silently: nothing catches a
+/// chain that skips a control or points the wrong way).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FocusSlot {
+    Theme,
+    Import,
+    Chrome,
+    TerminalFrame,
+    CursorShape,
+    CursorBlink,
+    CursorColor,
+    FontFamily,
+    FontSize,
+    Cols,
+    Rows,
+    Scrollback,
+    ConfirmClose,
+    Breadcrumb,
+}
+
+impl FocusSlot {
+    const ORDER: [FocusSlot; 14] = [
+        FocusSlot::Theme,
+        FocusSlot::Import,
+        FocusSlot::Chrome,
+        FocusSlot::TerminalFrame,
+        FocusSlot::CursorShape,
+        FocusSlot::CursorBlink,
+        FocusSlot::CursorColor,
+        FocusSlot::FontFamily,
+        FocusSlot::FontSize,
+        FocusSlot::Cols,
+        FocusSlot::Rows,
+        FocusSlot::Scrollback,
+        FocusSlot::ConfirmClose,
+        FocusSlot::Breadcrumb,
+    ];
+
+    fn index(self) -> usize {
+        Self::ORDER
+            .iter()
+            .position(|&slot| slot == self)
+            .expect("every FocusSlot appears in ORDER")
+    }
+
+    fn next(self) -> Self {
+        Self::ORDER[(self.index() + 1) % Self::ORDER.len()]
+    }
+
+    fn prev(self) -> Self {
+        let len = Self::ORDER.len();
+        Self::ORDER[(self.index() + len - 1) % len]
+    }
+
+    /// The stored `FocusHandle` this slot corresponds to. The match is the
+    /// only other place besides `ORDER` a new slot needs wiring in — miss
+    /// one and this fails to compile (non-exhaustive match) rather than
+    /// silently breaking Tab order at runtime.
+    fn handle(self, view: &SettingsView) -> &FocusHandle {
+        match self {
+            FocusSlot::Theme => &view.theme_focus,
+            FocusSlot::Import => &view.import_focus,
+            FocusSlot::Chrome => &view.chrome_focus,
+            FocusSlot::TerminalFrame => &view.terminal_frame_focus,
+            FocusSlot::CursorShape => &view.cursor_shape_focus,
+            FocusSlot::CursorBlink => &view.cursor_blink_focus,
+            FocusSlot::CursorColor => &view.cursor_color_field.focus,
+            FocusSlot::FontFamily => &view.font_family_focus,
+            FocusSlot::FontSize => &view.font_size_focus,
+            FocusSlot::Cols => &view.cols_field.focus,
+            FocusSlot::Rows => &view.rows_field.focus,
+            FocusSlot::Scrollback => &view.scrollback_field.focus,
+            FocusSlot::ConfirmClose => &view.confirm_close_focus,
+            FocusSlot::Breadcrumb => &view.breadcrumb_focus,
+        }
+    }
+
+    /// Build this slot's `Nav`, with `next`/`prev` derived from `ORDER`.
+    fn nav<'v>(self, view: &'v SettingsView, window: &Window) -> Nav<'v> {
+        Nav {
+            focus: self.handle(view),
+            is_focused: self.handle(view).is_focused(window),
+            next: self.next().handle(view),
+            prev: self.prev().handle(view),
+        }
+    }
+}
+
 /// Apply one keystroke to a text buffer. Returns `true` if it changed.
 fn edit_text(buf: &mut String, ks: &Keystroke) -> bool {
     if ks.modifiers.platform || ks.modifiers.control {
@@ -121,7 +213,6 @@ pub struct SettingsView {
     terminal_frame_focus: FocusHandle,
     cursor_shape_focus: FocusHandle,
     cursor_blink_focus: FocusHandle,
-    cursor_color_focus: FocusHandle,
     font_family_focus: FocusHandle,
     font_size_focus: FocusHandle,
     confirm_close_focus: FocusHandle,
@@ -174,7 +265,6 @@ impl SettingsView {
             terminal_frame_focus: cx.focus_handle(),
             cursor_shape_focus: cx.focus_handle(),
             cursor_blink_focus: cx.focus_handle(),
-            cursor_color_focus: cx.focus_handle(),
             font_family_focus: cx.focus_handle(),
             font_size_focus: cx.focus_handle(),
             confirm_close_focus: cx.focus_handle(),
@@ -381,15 +471,7 @@ impl Render for SettingsView {
                     .items_center()
                     .gap_2()
                     .child(theme_dropdown(self, focused_field(&self.theme_focus), cx))
-                    .child(import_theme_button(
-                        Nav {
-                            focus: &self.import_focus,
-                            is_focused: focused_field(&self.import_focus),
-                            next: &self.chrome_focus,
-                            prev: &self.theme_focus,
-                        },
-                        cx,
-                    ))
+                    .child(import_theme_button(FocusSlot::Import.nav(self, window), cx))
                     .when_some(self.import_status.clone(), |row, (ok, message)| {
                         row.child(
                             div()
@@ -416,12 +498,7 @@ impl Render for SettingsView {
                         this.settings.chrome_theme = name;
                         this.commit(cx);
                     },
-                    Nav {
-                        focus: &self.chrome_focus,
-                        is_focused: focused_field(&self.chrome_focus),
-                        next: &self.terminal_frame_focus,
-                        prev: &self.import_focus,
-                    },
+                    FocusSlot::Chrome.nav(self, window),
                     RadioLayout::Horizontal,
                     cx,
                 )
@@ -432,12 +509,7 @@ impl Render for SettingsView {
                 Some("Surround each tab's terminal with rounded, titlebar-colored padding."),
                 toggle_switch(
                     self.settings.terminal_frame,
-                    Nav {
-                        focus: &self.terminal_frame_focus,
-                        is_focused: focused_field(&self.terminal_frame_focus),
-                        next: &self.cursor_shape_focus,
-                        prev: &self.chrome_focus,
-                    },
+                    FocusSlot::TerminalFrame.nav(self, window),
                     |this, _window, cx| {
                         this.settings.terminal_frame = !this.settings.terminal_frame;
                         this.commit(cx);
@@ -466,12 +538,7 @@ impl Render for SettingsView {
                         this.settings.cursor_shape = shape;
                         this.commit(cx);
                     },
-                    Nav {
-                        focus: &self.cursor_shape_focus,
-                        is_focused: focused_field(&self.cursor_shape_focus),
-                        next: &self.cursor_blink_focus,
-                        prev: &self.terminal_frame_focus,
-                    },
+                    FocusSlot::CursorShape.nav(self, window),
                     RadioLayout::Horizontal,
                     cx,
                 )
@@ -482,12 +549,7 @@ impl Render for SettingsView {
                 Some("Blink the cursor while it's idle."),
                 toggle_switch(
                     self.settings.cursor_blink,
-                    Nav {
-                        focus: &self.cursor_blink_focus,
-                        is_focused: focused_field(&self.cursor_blink_focus),
-                        next: &self.cursor_color_focus,
-                        prev: &self.cursor_shape_focus,
-                    },
+                    FocusSlot::CursorBlink.nav(self, window),
                     |this, _window, cx| {
                         this.settings.cursor_blink = !this.settings.cursor_blink;
                         this.commit(cx);
@@ -512,8 +574,8 @@ impl Render for SettingsView {
                             if handle_tab_navigation(
                                 &ev.keystroke,
                                 window,
-                                &this.font_family_focus,
-                                &this.cursor_blink_focus,
+                                FocusSlot::CursorColor.next().handle(this),
+                                FocusSlot::CursorColor.prev().handle(this),
                             ) {
                                 return;
                             }
@@ -578,8 +640,8 @@ impl Render for SettingsView {
                         if handle_tab_navigation(
                             &ev.keystroke,
                             window,
-                            &this.rows_field.focus,
-                            &this.font_size_focus,
+                            FocusSlot::Cols.next().handle(this),
+                            FocusSlot::Cols.prev().handle(this),
                         ) {
                             return;
                         }
@@ -608,8 +670,8 @@ impl Render for SettingsView {
                         if handle_tab_navigation(
                             &ev.keystroke,
                             window,
-                            &this.scrollback_field.focus,
-                            &this.cols_field.focus,
+                            FocusSlot::Rows.next().handle(this),
+                            FocusSlot::Rows.prev().handle(this),
                         ) {
                             return;
                         }
@@ -640,8 +702,8 @@ impl Render for SettingsView {
                     if handle_tab_navigation(
                         &ev.keystroke,
                         window,
-                        &this.confirm_close_focus,
-                        &this.rows_field.focus,
+                        FocusSlot::Scrollback.next().handle(this),
+                        FocusSlot::Scrollback.prev().handle(this),
                     ) {
                         return;
                     }
@@ -666,12 +728,7 @@ impl Render for SettingsView {
                 Some("Ask before closing the last tab, or a tab with a running process."),
                 toggle_switch(
                     self.settings.confirm_close_tab,
-                    Nav {
-                        focus: &self.confirm_close_focus,
-                        is_focused: focused_field(&self.confirm_close_focus),
-                        next: &self.breadcrumb_focus,
-                        prev: &self.scrollback_field.focus,
-                    },
+                    FocusSlot::ConfirmClose.nav(self, window),
                     |this, _window, cx| {
                         this.settings.confirm_close_tab = !this.settings.confirm_close_tab;
                         this.commit(cx);
@@ -685,12 +742,7 @@ impl Render for SettingsView {
                 Some("Show a clickable directory path above each tab for changing directory."),
                 toggle_switch(
                     self.settings.show_breadcrumb,
-                    Nav {
-                        focus: &self.breadcrumb_focus,
-                        is_focused: focused_field(&self.breadcrumb_focus),
-                        next: &self.theme_focus,
-                        prev: &self.confirm_close_focus,
-                    },
+                    FocusSlot::Breadcrumb.nav(self, window),
                     |this, _window, cx| {
                         this.settings.show_breadcrumb = !this.settings.show_breadcrumb;
                         this.commit(cx);
@@ -1335,10 +1387,10 @@ fn theme_dropdown(
             this.commit(cx);
         },
         Nav {
-            focus: &view.theme_focus,
+            focus: FocusSlot::Theme.handle(view),
             is_focused,
-            next: &view.import_focus,
-            prev: &view.breadcrumb_focus,
+            next: FocusSlot::Theme.next().handle(view),
+            prev: FocusSlot::Theme.prev().handle(view),
         },
         cx,
     )
@@ -1377,10 +1429,10 @@ fn font_family_dropdown(
             this.commit(cx);
         },
         Nav {
-            focus: &view.font_family_focus,
+            focus: FocusSlot::FontFamily.handle(view),
             is_focused,
-            next: &view.font_size_focus,
-            prev: &view.cursor_color_focus,
+            next: FocusSlot::FontFamily.next().handle(view),
+            prev: FocusSlot::FontFamily.prev().handle(view),
         },
         cx,
     )
@@ -1419,10 +1471,10 @@ fn font_size_dropdown(
             }
         },
         Nav {
-            focus: &view.font_size_focus,
+            focus: FocusSlot::FontSize.handle(view),
             is_focused,
-            next: &view.cols_field.focus,
-            prev: &view.font_family_focus,
+            next: FocusSlot::FontSize.next().handle(view),
+            prev: FocusSlot::FontSize.prev().handle(view),
         },
         cx,
     )

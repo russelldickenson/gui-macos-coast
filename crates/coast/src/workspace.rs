@@ -81,6 +81,11 @@ pub struct Workspace {
     /// Focus target while `pending_close` is showing, so Enter/Escape reach
     /// the dialog instead of falling through to the terminal underneath.
     close_confirm_focus: FocusHandle,
+    /// Bumped on every settings change so only the most recent debounced
+    /// disk write actually happens — settings changes apply live
+    /// immediately regardless, this just avoids a synchronous file write
+    /// per keystroke while e.g. typing in a settings text field.
+    save_epoch: u64,
 }
 
 impl Workspace {
@@ -98,6 +103,7 @@ impl Workspace {
             resize_hud_epoch: 0,
             pending_close: None,
             close_confirm_focus: cx.focus_handle(),
+            save_epoch: 0,
         };
         this.spawn_reaper(cx);
         this
@@ -135,6 +141,7 @@ impl Workspace {
                     if workspace.tabs.len() != before {
                         workspace.active =
                             workspace.active.min(workspace.tabs.len().saturating_sub(1));
+                        workspace.sync_active_terminal(cx);
                         cx.notify();
                     }
                     false
@@ -189,6 +196,7 @@ impl Workspace {
             kind: TabKind::Terminal(view),
         });
         self.active = self.tabs.len() - 1;
+        self.sync_active_terminal(cx);
         cx.notify();
         self.focus_active(window, cx);
     }
@@ -236,6 +244,7 @@ impl Workspace {
             kind: TabKind::Settings(view),
         });
         self.active = self.tabs.len() - 1;
+        self.sync_active_terminal(cx);
         cx.notify();
         self.focus_active(window, cx);
     }
@@ -283,6 +292,7 @@ impl Workspace {
             return;
         }
         self.active = self.active.min(self.tabs.len() - 1);
+        self.sync_active_terminal(cx);
         cx.notify();
         self.focus_active(window, cx);
     }
@@ -305,8 +315,21 @@ impl Workspace {
             return;
         }
         self.active = ix;
+        self.sync_active_terminal(cx);
         cx.notify();
         self.focus_active(window, cx);
+    }
+
+    /// Tell every terminal tab whether it's the one currently shown, so
+    /// backgrounded tabs can skip cursor-blink/cwd-poll work that has
+    /// nothing visible to update (see `TerminalView::set_active`). Call
+    /// this after anything that changes `self.active`.
+    fn sync_active_terminal(&self, cx: &mut Context<Self>) {
+        for (ix, tab) in self.tabs.iter().enumerate() {
+            if let TabKind::Terminal(view) = &tab.kind {
+                view.update(cx, |view, cx| view.set_active(ix == self.active, cx));
+            }
+        }
     }
 
     /// Cycle to the next tab, wrapping around.
@@ -352,12 +375,10 @@ impl Workspace {
     /// default window size only take effect for new tabs/windows, since
     /// they're baked in at spawn time.
     pub fn apply_settings(&mut self, settings: coast_settings::Settings, cx: &mut Context<Self>) {
-        if let Err(err) = settings.save() {
-            eprintln!("[coast] failed to save settings: {err:#}");
-        }
         self.theme = settings.theme();
         self.chrome = settings.chrome_theme();
         self.settings = settings;
+        self.schedule_save(cx);
 
         let font_family = SharedString::new(self.settings.font_family.clone());
         let font_size = self.settings.font_size;
@@ -381,6 +402,31 @@ impl Workspace {
             }
         }
         cx.notify();
+    }
+
+    /// Write `self.settings` to disk ~400ms from now, unless a newer
+    /// change supersedes this one first. `self.settings` is re-read at
+    /// fire time (not captured now), so a burst of rapid changes — typing
+    /// in a settings text field, say — ends up doing a single disk write
+    /// of the final value instead of one per change.
+    fn schedule_save(&mut self, cx: &mut Context<Self>) {
+        self.save_epoch = self.save_epoch.wrapping_add(1);
+        let epoch = self.save_epoch;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(400))
+                .await;
+            this.update(cx, |this, _cx| {
+                if this.save_epoch != epoch {
+                    return;
+                }
+                if let Err(err) = this.settings.save() {
+                    eprintln!("[coast] failed to save settings: {err:#}");
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 }
 

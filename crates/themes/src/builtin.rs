@@ -1,5 +1,7 @@
 //! Built-in themes (Windows Terminal defaults + popular favorites).
 
+use std::sync::OnceLock;
+
 use super::{Color, Theme};
 
 macro_rules! c {
@@ -12,17 +14,26 @@ macro_rules! c {
     };
 }
 
+/// The built-in themes, cloned from a table built once on first use —
+/// callers that just want to look one up by name (every `Settings::theme()`
+/// call) shouldn't re-parse every hex color and re-allocate every theme's
+/// name string on every call.
 pub fn builtin_themes() -> Vec<Theme> {
-    vec![
-        campbell(),
-        one_half_dark(),
-        one_half_light(),
-        dracula(),
-        tokyo_night(),
-        catppuccin_mocha(),
-        solarized_dark(),
-        solarized_light(),
-    ]
+    static THEMES: OnceLock<Vec<Theme>> = OnceLock::new();
+    THEMES
+        .get_or_init(|| {
+            vec![
+                campbell(),
+                one_half_dark(),
+                one_half_light(),
+                dracula(),
+                tokyo_night(),
+                catppuccin_mocha(),
+                solarized_dark(),
+                solarized_light(),
+            ]
+        })
+        .clone()
 }
 
 /// Windows Terminal's default.

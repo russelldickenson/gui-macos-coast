@@ -101,6 +101,17 @@ pub struct TerminalView {
     /// `TerminalElement::prepaint`, which runs after `render`), which is
     /// imperceptible in practice.
     content_width: Pixels,
+    /// Whether this tab is the one currently shown. Backgrounded tabs skip
+    /// cursor-blink animation and the cwd poll (a syscall) in `poll()` —
+    /// neither has anything visible to update — while still draining PTY
+    /// events at the same rate, so exit detection stays timely and the
+    /// event channel can't grow unbounded.
+    is_active: bool,
+    /// The last directory listing fetched for the breadcrumb's
+    /// subdirectory dropdown, so it isn't re-read from disk on every
+    /// render while the dropdown stays open (e.g. every cursor-blink
+    /// tick) — only when the directory it's for actually changes.
+    subdirs_cache: Option<(std::path::PathBuf, Vec<String>)>,
 }
 
 impl TerminalView {
@@ -141,6 +152,8 @@ impl TerminalView {
             last_cwd_check: Instant::now() - CWD_POLL_INTERVAL,
             breadcrumb_open: false,
             content_width: px(2000.),
+            is_active: true,
+            subdirs_cache: None,
         };
         this.spawn_poll(cx);
         this
@@ -184,6 +197,23 @@ impl TerminalView {
 
     pub fn exited(&self) -> Option<i32> {
         self.exited
+    }
+
+    /// Tell the tab whether it's the one currently shown (see `is_active`).
+    /// Becoming active forces an immediate cwd refresh and repaint rather
+    /// than waiting for the next poll tick, so switching to a tab doesn't
+    /// show a momentarily-stale breadcrumb.
+    pub fn set_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.is_active == active {
+            return;
+        }
+        self.is_active = active;
+        if active {
+            self.last_cwd_check = Instant::now() - CWD_POLL_INTERVAL;
+            self.last_blink = Instant::now();
+            self.cursor_visible = true;
+        }
+        cx.notify();
     }
 
     pub fn handle_keystroke(&self, ks: &Keystroke) {
@@ -248,17 +278,26 @@ impl TerminalView {
             let text = self.session.screen_text();
             eprintln!("[coast] first grid output:\n{text}");
         }
-        if self.cursor_blink && self.last_blink.elapsed() >= BLINK_INTERVAL {
-            self.last_blink = Instant::now();
-            self.cursor_visible = !self.cursor_visible;
-            dirty = true;
-        }
-        if self.show_breadcrumb && self.last_cwd_check.elapsed() >= CWD_POLL_INTERVAL {
-            self.last_cwd_check = Instant::now();
-            let dir = self.session.current_dir();
-            if dir != self.current_dir {
-                self.current_dir = dir;
+        // Blink animation and the cwd poll (a syscall) only matter for the
+        // tab actually on screen — a backgrounded tab has neither a
+        // visible cursor nor a visible breadcrumb, so there's nothing to
+        // redraw or look up for it. The event drain above still always
+        // runs, though: that's what keeps `exited` accurate (the reaper
+        // depends on it) and stops the session's event channel from
+        // growing unbounded under heavy background output.
+        if self.is_active {
+            if self.cursor_blink && self.last_blink.elapsed() >= BLINK_INTERVAL {
+                self.last_blink = Instant::now();
+                self.cursor_visible = !self.cursor_visible;
                 dirty = true;
+            }
+            if self.show_breadcrumb && self.last_cwd_check.elapsed() >= CWD_POLL_INTERVAL {
+                self.last_cwd_check = Instant::now();
+                let dir = self.session.current_dir();
+                if dir != self.current_dir {
+                    self.current_dir = dir;
+                    dirty = true;
+                }
             }
         }
         if dirty {
@@ -299,11 +338,34 @@ impl TerminalView {
     /// that works with any POSIX shell.
     fn cd_to(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
         self.breadcrumb_open = false;
+        // If something other than the idle shell owns the terminal (vim,
+        // ssh, a REPL, a partially-typed command line...), sending raw
+        // keystrokes at it is unsafe — they'd land in whatever that
+        // program does with input, not necessarily "cd". Bail out instead
+        // of risking corrupting it.
+        if self.session.has_foreground_process() {
+            eprintln!("[coast] breadcrumb cd skipped: a foreground process is running");
+            cx.notify();
+            return;
+        }
         let quoted = path.to_string_lossy().replace('\'', "'\\''");
         if let Err(err) = self.session.write(format!("cd '{quoted}'\n").as_bytes()) {
             eprintln!("[coast] breadcrumb cd failed: {err:#}");
         }
         cx.notify();
+    }
+
+    /// The breadcrumb's subdirectory listing for `path`, from cache if
+    /// it's still for the same directory.
+    fn cached_subdirs(&mut self, path: &std::path::Path) -> Vec<String> {
+        if let Some((cached_path, names)) = &self.subdirs_cache {
+            if cached_path == path {
+                return names.clone();
+            }
+        }
+        let names = subdirectories(path);
+        self.subdirs_cache = Some((path.to_path_buf(), names.clone()));
+        names
     }
 }
 
@@ -362,20 +424,32 @@ impl Render for TerminalView {
             .child(content)
             .child(scrollbar(&self.session, show_scrollbar, cx));
 
+        let breadcrumb_element = if self.show_breadcrumb {
+            self.current_dir.clone().map(|dir| {
+                let subdirs = if self.breadcrumb_open {
+                    self.cached_subdirs(&dir)
+                } else {
+                    Vec::new()
+                };
+                breadcrumb(
+                    &dir,
+                    self.breadcrumb_open,
+                    self.content_width,
+                    self.framed,
+                    &subdirs,
+                    cx,
+                )
+            })
+        } else {
+            None
+        };
+
         gpui::div()
             .flex()
             .flex_col()
             .size_full()
             .child(terminal_area)
-            .when(self.show_breadcrumb, |root| {
-                let width = self.content_width;
-                let framed = self.framed;
-                root.children(
-                    self.current_dir
-                        .clone()
-                        .map(|dir| breadcrumb(&dir, self.breadcrumb_open, width, framed, cx)),
-                )
-            })
+            .children(breadcrumb_element)
     }
 }
 
@@ -596,6 +670,7 @@ fn breadcrumb(
     open: bool,
     content_width: Pixels,
     framed: bool,
+    subdirs: &[String],
     cx: &mut Context<TerminalView>,
 ) -> impl IntoElement {
     let segments = breadcrumb_segments(path);
@@ -717,7 +792,6 @@ fn breadcrumb(
 
         let mut current_wrapper = gpui::div().flex().flex_col().child(trigger_row);
         if open {
-            let names = subdirectories(path);
             let mut list = gpui::div()
                 .id("breadcrumb-subdirs")
                 .mb_1()
@@ -732,7 +806,7 @@ fn breadcrumb(
                 .border_color(rgb(BREADCRUMB_PILL_BORDER))
                 .shadow_md();
 
-            if names.is_empty() {
+            if subdirs.is_empty() {
                 list = list.child(
                     gpui::div()
                         .px_2()
@@ -742,9 +816,9 @@ fn breadcrumb(
                         .child("No subdirectories"),
                 );
             } else {
-                let last = names.len() - 1;
-                for (ix, name) in names.into_iter().enumerate() {
-                    let child_path = path.join(&name);
+                let last = subdirs.len() - 1;
+                for (ix, name) in subdirs.iter().enumerate() {
+                    let child_path = path.join(name);
                     let mut item = gpui::div()
                         .id(("breadcrumb-subdir", ix))
                         .px_2()
@@ -753,7 +827,7 @@ fn breadcrumb(
                         .text_color(rgb(BREADCRUMB_TEXT))
                         .cursor_pointer()
                         .hover(|s| s.bg(rgb(BREADCRUMB_PILL_HOVER)))
-                        .child(name)
+                        .child(name.clone())
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |view, _, _window, cx| view.cd_to(&child_path, cx)),
