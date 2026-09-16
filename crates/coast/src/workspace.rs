@@ -176,6 +176,7 @@ impl Workspace {
                 settings.font_size,
                 theme,
                 settings.cursor_blink,
+                settings.show_breadcrumb,
                 cx,
             )
         });
@@ -361,6 +362,7 @@ impl Workspace {
         let font_size = self.settings.font_size;
         let theme = self.theme.clone();
         let cursor_blink = self.settings.cursor_blink;
+        let show_breadcrumb = self.settings.show_breadcrumb;
         for tab in &self.tabs {
             if let TabKind::Terminal(view) = &tab.kind {
                 view.update(cx, |view, cx| {
@@ -369,6 +371,7 @@ impl Workspace {
                         font_size,
                         theme.clone(),
                         cursor_blink,
+                        show_breadcrumb,
                         cx,
                     )
                 });

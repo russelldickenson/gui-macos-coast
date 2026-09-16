@@ -11,6 +11,7 @@
 //! default_cols = 100
 //! default_rows = 30
 //! confirm_close_tab = true
+//! show_breadcrumb = false
 //! ```
 
 use std::path::PathBuf;
@@ -57,6 +58,10 @@ fn default_confirm_close_tab() -> bool {
     true
 }
 
+fn default_show_breadcrumb() -> bool {
+    false
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_font_family")]
@@ -83,6 +88,10 @@ pub struct Settings {
     /// one open (which quits the app) or has a foreground process running.
     #[serde(default = "default_confirm_close_tab")]
     pub confirm_close_tab: bool,
+    /// Show a directory breadcrumb above each terminal tab's content for
+    /// clicking through to a parent directory or a subdirectory.
+    #[serde(default = "default_show_breadcrumb")]
+    pub show_breadcrumb: bool,
 }
 
 impl Default for Settings {
@@ -98,6 +107,7 @@ impl Default for Settings {
             default_cols: default_cols(),
             default_rows: default_rows(),
             confirm_close_tab: default_confirm_close_tab(),
+            show_breadcrumb: default_show_breadcrumb(),
         }
     }
 }
@@ -237,6 +247,7 @@ mod tests {
         assert_eq!(s.default_cols, 100);
         assert_eq!(s.default_rows, 30);
         assert!(s.confirm_close_tab);
+        assert!(!s.show_breadcrumb);
     }
 
     #[test]
@@ -250,11 +261,13 @@ mod tests {
         let mut s = Settings::default();
         s.cursor_shape = "beam".to_string();
         s.default_cols = 120;
+        s.show_breadcrumb = true;
         s.save().expect("save settings");
 
         let reloaded = Settings::load_default().expect("reload settings");
         assert_eq!(reloaded.cursor_shape, "beam");
         assert_eq!(reloaded.default_cols, 120);
+        assert!(reloaded.show_breadcrumb);
 
         std::fs::remove_dir_all(&dir).ok();
     }

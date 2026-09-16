@@ -11,11 +11,11 @@ use alacritty_terminal::{
     vte::ansi::{Color as TermColor, CursorShape, NamedColor, Rgb},
 };
 use gpui::{
-    fill, point, prelude::*, px, relative, App, Bounds, Context, Element, ElementId, Entity,
-    EventEmitter, FocusHandle, Focusable, Font, FontStyle, FontWeight, GlobalElementId, Hsla,
-    InspectorElementId, IntoElement, KeyDownEvent, Keystroke, LayoutId, PaintQuad, Pixels, Point,
-    ScrollWheelEvent, ShapedLine, SharedString, Size, StrikethroughStyle, Style, TextRun,
-    UnderlineStyle, Window,
+    anchored, deferred, fill, point, prelude::*, px, relative, rgb, svg, App, Bounds, Context,
+    Element, ElementId, Entity, EventEmitter, FocusHandle, Focusable, Font, FontStyle, FontWeight,
+    GlobalElementId, Hsla, InspectorElementId, IntoElement, KeyDownEvent, Keystroke, LayoutId,
+    MouseButton, PaintQuad, Pixels, Point, ScrollWheelEvent, ShapedLine, SharedString, Size,
+    StrikethroughStyle, Style, TextRun, UnderlineStyle, Window,
 };
 
 use crate::colors;
@@ -23,6 +23,7 @@ use terminal_core::{Session, SessionEvent};
 
 const BLINK_INTERVAL: Duration = Duration::from_millis(530);
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
+const CWD_POLL_INTERVAL: Duration = Duration::from_millis(400);
 const MEASURE_SAMPLE: &str = "MMMMMMMM";
 
 /// Measure a monospace cell's pixel size for `font_family`/`font_size`.
@@ -80,6 +81,14 @@ pub struct TerminalView {
     /// scroll can't hide the bar out from under a newer one.
     scrollbar_epoch: u64,
     scrollbar_hovered: bool,
+    /// Whether the directory breadcrumb bar is shown above the grid.
+    show_breadcrumb: bool,
+    /// The foreground process's (or the shell's, if idle) current working
+    /// directory, refreshed periodically while `show_breadcrumb` is on.
+    current_dir: Option<std::path::PathBuf>,
+    last_cwd_check: Instant,
+    /// Whether the breadcrumb's subdirectory list is currently open.
+    breadcrumb_open: bool,
 }
 
 impl TerminalView {
@@ -89,6 +98,7 @@ impl TerminalView {
         font_size: f32,
         theme: coast_themes::Theme,
         cursor_blink: bool,
+        show_breadcrumb: bool,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut this = Self {
@@ -112,6 +122,10 @@ impl TerminalView {
             scrollbar_visible: false,
             scrollbar_epoch: 0,
             scrollbar_hovered: false,
+            show_breadcrumb,
+            current_dir: None,
+            last_cwd_check: Instant::now() - CWD_POLL_INTERVAL,
+            breadcrumb_open: false,
         };
         this.spawn_poll(cx);
         this
@@ -133,6 +147,7 @@ impl TerminalView {
         font_size: f32,
         theme: coast_themes::Theme,
         cursor_blink: bool,
+        show_breadcrumb: bool,
         cx: &mut Context<Self>,
     ) {
         self.font_family = font_family;
@@ -140,6 +155,13 @@ impl TerminalView {
         self.theme = theme;
         self.cursor_blink = cursor_blink;
         self.font_key = (SharedString::default(), 0);
+        if self.show_breadcrumb != show_breadcrumb {
+            self.show_breadcrumb = show_breadcrumb;
+            self.breadcrumb_open = false;
+            if !show_breadcrumb {
+                self.current_dir = None;
+            }
+        }
         cx.notify();
     }
 
@@ -214,6 +236,14 @@ impl TerminalView {
             self.cursor_visible = !self.cursor_visible;
             dirty = true;
         }
+        if self.show_breadcrumb && self.last_cwd_check.elapsed() >= CWD_POLL_INTERVAL {
+            self.last_cwd_check = Instant::now();
+            let dir = self.session.current_dir();
+            if dir != self.current_dir {
+                self.current_dir = dir;
+                dirty = true;
+            }
+        }
         if dirty {
             cx.notify();
         }
@@ -243,6 +273,19 @@ impl TerminalView {
             .ok();
         })
         .detach();
+        cx.notify();
+    }
+
+    /// Send `cd '<path>'` to the shell, as if the user had typed it. There's
+    /// no shell-integration hook to change directory more directly without
+    /// the user's own rc file cooperating, so this is the simplest thing
+    /// that works with any POSIX shell.
+    fn cd_to(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        self.breadcrumb_open = false;
+        let quoted = path.to_string_lossy().replace('\'', "'\\''");
+        if let Err(err) = self.session.write(format!("cd '{quoted}'\n").as_bytes()) {
+            eprintln!("[coast] breadcrumb cd failed: {err:#}");
+        }
         cx.notify();
     }
 }
@@ -275,11 +318,25 @@ impl Render for TerminalView {
 
         let show_scrollbar = self.scrollbar_visible || self.scrollbar_hovered;
 
-        gpui::div()
+        let terminal_area = gpui::div()
             .relative()
-            .size_full()
+            .flex_1()
+            .w_full()
             .child(content)
-            .child(scrollbar(&self.session, show_scrollbar, cx))
+            .child(scrollbar(&self.session, show_scrollbar, cx));
+
+        gpui::div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(terminal_area)
+            .when(self.show_breadcrumb, |root| {
+                root.children(
+                    self.current_dir
+                        .clone()
+                        .map(|dir| breadcrumb(&dir, self.breadcrumb_open, cx)),
+                )
+            })
     }
 }
 
@@ -340,6 +397,244 @@ fn scrollbar(session: &Session, visible: bool, cx: &mut Context<TerminalView>) -
                 }),
         )
         .child(spacer(below))
+}
+
+const BREADCRUMB_BAR_HEIGHT: f32 = 40.;
+const BREADCRUMB_PILL: u32 = 0x2c2d3a;
+const BREADCRUMB_PILL_BORDER: u32 = 0x40424f;
+const BREADCRUMB_PILL_HOVER: u32 = 0x363848;
+const BREADCRUMB_TEXT: u32 = 0xd7d8e2;
+const BREADCRUMB_CHEVRON: u32 = 0x7c7e90;
+
+/// One clickable pill in the breadcrumb: a display label plus the full path
+/// clicking it navigates to (an ancestor for every segment but the last).
+struct Crumb {
+    label: String,
+    path: std::path::PathBuf,
+    is_home: bool,
+}
+
+/// Break `path` into breadcrumb segments. When it's under `$HOME`, the
+/// first segment is a "Home" pill (matching the reference screenshot);
+/// otherwise segments run from the filesystem root.
+fn breadcrumb_segments(path: &std::path::Path) -> Vec<Crumb> {
+    let mut segments = Vec::new();
+    if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+        if let Ok(rel) = path.strip_prefix(&home) {
+            segments.push(Crumb {
+                label: "Home".to_string(),
+                path: home.clone(),
+                is_home: true,
+            });
+            let mut acc = home;
+            for part in rel.components() {
+                acc.push(part);
+                segments.push(Crumb {
+                    label: part.as_os_str().to_string_lossy().to_string(),
+                    path: acc.clone(),
+                    is_home: false,
+                });
+            }
+            return segments;
+        }
+    }
+    let mut acc = std::path::PathBuf::from("/");
+    segments.push(Crumb {
+        label: "/".to_string(),
+        path: acc.clone(),
+        is_home: false,
+    });
+    for part in path.components() {
+        if let std::path::Component::Normal(part) = part {
+            acc.push(part);
+            segments.push(Crumb {
+                label: part.to_string_lossy().to_string(),
+                path: acc.clone(),
+                is_home: false,
+            });
+        }
+    }
+    segments
+}
+
+/// Directory names directly inside `path`, alphabetical, dotfiles hidden.
+fn subdirectories(path: &std::path::Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|name| !name.starts_with('.'))
+        .collect();
+    names.sort();
+    names
+}
+
+/// The directory breadcrumb bar: a row of pills (Home / ancestor
+/// directories / the current directory), each navigating to that directory
+/// on click, with the last pill instead opening a list of its
+/// subdirectories to navigate into.
+fn breadcrumb(
+    path: &std::path::Path,
+    open: bool,
+    cx: &mut Context<TerminalView>,
+) -> impl IntoElement {
+    let segments = breadcrumb_segments(path);
+    let last_ix = segments.len().saturating_sub(1);
+
+    let mut bar = gpui::div()
+        .flex_none()
+        .w_full()
+        .h(px(BREADCRUMB_BAR_HEIGHT))
+        .px_2()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .bg(rgb(BREADCRUMB_PILL));
+
+    for (ix, crumb) in segments.iter().enumerate() {
+        let is_last = ix == last_ix;
+        let target = crumb.path.clone();
+
+        // Every pill shares the same fill/border/text so the row reads as
+        // one consistent path, not a highlighted "current" segment among
+        // dimmer ones; only the trailing chevron marks the last one as
+        // openable.
+        let mut pill = gpui::div()
+            .id(("breadcrumb-segment", ix))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1p5()
+            .px(px(10.))
+            .py(px(2.))
+            .rounded_md()
+            .cursor_pointer()
+            .text_size(px(12.))
+            .bg(rgb(BREADCRUMB_PILL))
+            .border_1()
+            .border_color(rgb(BREADCRUMB_PILL_BORDER))
+            .text_color(rgb(BREADCRUMB_TEXT))
+            .hover(|s| s.bg(rgb(BREADCRUMB_PILL_HOVER)));
+
+        if crumb.is_home {
+            pill = pill.child("⌂");
+        }
+        pill = pill.child(crumb.label.clone());
+
+        if !is_last {
+            pill = pill.on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _, _window, cx| view.cd_to(&target, cx)),
+            );
+            bar = bar.child(pill);
+            bar = bar.child(
+                gpui::div()
+                    .text_size(px(16.))
+                    .text_color(rgb(BREADCRUMB_CHEVRON))
+                    .child("›"),
+            );
+            continue;
+        }
+
+        // The last pill opens a subdirectory list. The trigger row (pill +
+        // chevron) is nested here, rather than the deferred list living
+        // beside the whole, full-width bar, so the list's natural,
+        // pre-absolute-positioning anchor is this row's own bounds, not
+        // the bar's left edge.
+        fn toggle_breadcrumb(view: &mut TerminalView, _: &gpui::MouseDownEvent, _window: &mut Window, cx: &mut Context<TerminalView>) {
+            view.breadcrumb_open = !view.breadcrumb_open;
+            cx.notify();
+        }
+        pill = pill.on_mouse_down(MouseButton::Left, cx.listener(toggle_breadcrumb));
+
+        let chevron = gpui::div()
+            .id("breadcrumb-toggle")
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .child(
+                svg()
+                    .path("icons/chevron-down.svg")
+                    .size(px(16.))
+                    .text_color(rgb(BREADCRUMB_CHEVRON)),
+            )
+            .on_mouse_down(MouseButton::Left, cx.listener(toggle_breadcrumb));
+
+        let trigger_row = gpui::div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1()
+            .child(pill)
+            .child(chevron);
+
+        let mut current_wrapper = gpui::div().flex().flex_col().child(trigger_row);
+        if open {
+            let names = subdirectories(path);
+            let mut list = gpui::div()
+                .id("breadcrumb-subdirs")
+                .mb_1()
+                .w(px(220.))
+                .max_h(px(260.))
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .rounded_md()
+                .bg(rgb(BREADCRUMB_PILL))
+                .border_1()
+                .border_color(rgb(BREADCRUMB_PILL_BORDER))
+                .shadow_md();
+
+            if names.is_empty() {
+                list = list.child(
+                    gpui::div()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .text_color(rgb(BREADCRUMB_CHEVRON))
+                        .child("No subdirectories"),
+                );
+            } else {
+                let last = names.len() - 1;
+                for (ix, name) in names.into_iter().enumerate() {
+                    let child_path = path.join(&name);
+                    let mut item = gpui::div()
+                        .id(("breadcrumb-subdir", ix))
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .text_color(rgb(BREADCRUMB_TEXT))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(rgb(BREADCRUMB_PILL_HOVER)))
+                        .child(name)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |view, _, _window, cx| view.cd_to(&child_path, cx)),
+                        );
+                    if ix != last {
+                        item = item.border_b_1().border_color(rgb(BREADCRUMB_PILL_BORDER));
+                    }
+                    list = list.child(item);
+                }
+            }
+            current_wrapper = current_wrapper.child(deferred(
+                anchored().snap_to_window_with_margin(px(8.)).child(list),
+            ));
+        }
+        bar = bar.child(current_wrapper);
+    }
+
+    bar.on_mouse_down_out(cx.listener(|view, _, _window, cx| {
+        if view.breadcrumb_open {
+            view.breadcrumb_open = false;
+            cx.notify();
+        }
+    }))
 }
 
 /// One visible row copied out of the grid (lock-free shaping afterwards).

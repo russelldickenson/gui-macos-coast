@@ -256,30 +256,43 @@ impl Session {
         Ok(())
     }
 
-    /// Whether something other than the idle shell prompt currently owns
-    /// the terminal's foreground process group — e.g. a build, an editor,
-    /// an ssh session. Used to decide whether closing the tab needs
-    /// confirmation. Compares the PTY's foreground process group (as the
-    /// kernel reports it) against the shell's own pid; if they differ, a
-    /// child process is running in the foreground.
-    pub fn has_foreground_process(&self) -> bool {
-        let shell_pid = match self
-            .child
+    /// The shell's own pid (the direct child spawned into the PTY).
+    fn shell_pid(&self) -> Option<libc::pid_t> {
+        self.child
             .lock()
             .ok()
             .and_then(|guard| guard.as_ref().and_then(|child| child.process_id()))
-        {
-            Some(pid) => pid as libc::pid_t,
-            None => return false,
-        };
+            .map(|pid| pid as libc::pid_t)
+    }
 
-        let fd = match self.master.lock().ok().and_then(|m| m.as_raw_fd()) {
-            Some(fd) => fd,
-            None => return false,
-        };
+    /// The pid of whichever process currently owns the PTY's foreground
+    /// process group, as the kernel reports it via `tcgetpgrp` — in the
+    /// common case (no job control weirdness) this is the pid of the
+    /// group's leader, i.e. the actual foreground command.
+    fn foreground_pid(&self) -> Option<libc::pid_t> {
+        let fd = self.master.lock().ok().and_then(|m| m.as_raw_fd())?;
+        let pgid = unsafe { libc::tcgetpgrp(fd) };
+        (pgid > 0).then_some(pgid)
+    }
 
-        let fg_pgid = unsafe { libc::tcgetpgrp(fd) };
-        fg_pgid > 0 && fg_pgid != shell_pid
+    /// Whether something other than the idle shell prompt currently owns
+    /// the terminal's foreground process group — e.g. a build, an editor,
+    /// an ssh session. Used to decide whether closing the tab needs
+    /// confirmation.
+    pub fn has_foreground_process(&self) -> bool {
+        match (self.shell_pid(), self.foreground_pid()) {
+            (Some(shell), Some(fg)) => fg != shell,
+            _ => false,
+        }
+    }
+
+    /// The current working directory of whichever process is in the
+    /// foreground (the running command if there is one, otherwise the
+    /// shell itself) — drives the directory breadcrumb. `None` if it can't
+    /// be determined (process just exited, sandboxing, etc).
+    pub fn current_dir(&self) -> Option<std::path::PathBuf> {
+        let pid = self.foreground_pid().or_else(|| self.shell_pid())?;
+        proc_cwd(pid)
     }
 
     /// Run a closure against the emulation state (UI render path).
@@ -353,6 +366,41 @@ impl Drop for Session {
     }
 }
 
+/// The current working directory of a process, via macOS's
+/// `proc_pidinfo(PROC_PIDVNODEPATHINFO)` — the same mechanism Activity
+/// Monitor / `lsof` use, no `/proc` filesystem needed.
+fn proc_cwd(pid: libc::pid_t) -> Option<std::path::PathBuf> {
+    use std::mem::MaybeUninit;
+
+    let mut info = MaybeUninit::<libc::proc_vnodepathinfo>::uninit();
+    let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDVNODEPATHINFO,
+            0,
+            info.as_mut_ptr() as *mut libc::c_void,
+            size,
+        )
+    };
+    if written != size {
+        return None;
+    }
+    let info = unsafe { info.assume_init() };
+
+    // `vip_path` is laid out as a contiguous MAXPATHLEN (1024) byte,
+    // NUL-terminated C string, just split into `[[c_char; 32]; 32]` to
+    // dodge a const-generic limitation in `libc`; read it back as flat bytes.
+    let path_bytes: &[u8] = unsafe {
+        std::slice::from_raw_parts(info.pvi_cdir.vip_path.as_ptr() as *const u8, 1024)
+    };
+    let end = path_bytes.iter().position(|&b| b == 0).unwrap_or(path_bytes.len());
+    if end == 0 {
+        return None;
+    }
+    Some(std::path::PathBuf::from(std::str::from_utf8(&path_bytes[..end]).ok()?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,5 +465,43 @@ mod tests {
             text.contains("roundtrip-ok-123"),
             "expected echo output, got:\n{text}"
         );
+    }
+
+    #[test]
+    fn current_dir_tracks_cd() {
+        let session = Session::spawn(SpawnOptions {
+            shell: "/bin/sh".to_string(),
+            args: vec![],
+            cols: 80,
+            rows: 24,
+            scrollback: 1000,
+            cursor_shape: CursorShape::Block,
+        })
+        .expect("spawn session");
+
+        let tmp_raw = std::env::temp_dir().join(format!("coast-cwd-test-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp_raw).unwrap();
+        let tmp = tmp_raw.canonicalize().unwrap();
+
+        session
+            .write(format!("cd '{}'\necho cd-done\n", tmp.display()).as_bytes())
+            .expect("write to pty");
+        wait_for_text(&session, "cd-done", Duration::from_secs(10));
+
+        // The shell needs a beat after echoing to actually finish chdir
+        // and settle back at the prompt as the pty's foreground process.
+        let mut seen = None;
+        for _ in 0..50 {
+            if let Some(dir) = session.current_dir() {
+                if dir == tmp {
+                    seen = Some(dir);
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(seen, Some(tmp.clone()), "current_dir never reported {tmp:?}");
+
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }
