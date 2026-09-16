@@ -330,9 +330,20 @@ impl Element for TerminalElement {
             });
         }
 
-        // Fit the grid to the available bounds.
-        let cols = ((bounds.size.width / cell.width).floor() as u16).max(2);
-        let rows = ((bounds.size.height / cell.height).floor() as u16).max(1);
+        // Inset the content area from the element's edges so the grid
+        // doesn't butt right up against the window border.
+        let padding = cell.width / 2.;
+        let content_bounds = Bounds {
+            origin: point(bounds.origin.x + padding, bounds.origin.y + padding),
+            size: Size {
+                width: bounds.size.width - padding * 2.,
+                height: bounds.size.height - padding * 2.,
+            },
+        };
+
+        // Fit the grid to the available (padded) bounds.
+        let cols = ((content_bounds.size.width / cell.width).floor() as u16).max(2);
+        let rows = ((content_bounds.size.height / cell.height).floor() as u16).max(1);
         if cols != session.cols() || rows != session.rows() {
             eprintln!("[coast] resize {}x{} -> {cols}x{rows}", session.cols(), session.rows());
             let _ = session.resize(cols, rows);
@@ -379,7 +390,7 @@ impl Element for TerminalElement {
         let (cursor_shape, cursor_line, cursor_col) = cursor;
 
         for (row_ix, snapshot) in row_snapshots.iter().enumerate().take(rows as usize) {
-            let y = bounds.origin.y + cell.height * row_ix as f32;
+            let y = content_bounds.origin.y + cell.height * row_ix as f32;
             let (text, runs) = build_row(
                 snapshot,
                 display_cols,
@@ -397,7 +408,7 @@ impl Element for TerminalElement {
                 window
                     .text_system()
                     .shape_line(SharedString::new(text), font_size, &runs, None);
-            shaped.push((point(bounds.origin.x, y), line));
+            shaped.push((point(content_bounds.origin.x, y), line));
         }
 
         // Cursor block (the cursor cell itself is painted inverted in build_row).
@@ -408,8 +419,8 @@ impl Element for TerminalElement {
             && cursor_col < display_cols
         {
             let origin = point(
-                bounds.origin.x + cell.width * cursor_col as f32,
-                bounds.origin.y + cell.height * cursor_line as f32,
+                content_bounds.origin.x + cell.width * cursor_col as f32,
+                content_bounds.origin.y + cell.height * cursor_line as f32,
             );
             let quad_bounds = match cursor_shape {
                 CursorShape::Block | CursorShape::HollowBlock => {
