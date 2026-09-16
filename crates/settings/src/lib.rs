@@ -12,6 +12,7 @@
 //! default_rows = 30
 //! confirm_close_tab = true
 //! show_breadcrumb = false
+//! cursor_color = "#ff9900" # omit to use the theme's own cursor color
 //! ```
 
 use std::path::PathBuf;
@@ -92,6 +93,10 @@ pub struct Settings {
     /// clicking through to a parent directory or a subdirectory.
     #[serde(default = "default_show_breadcrumb")]
     pub show_breadcrumb: bool,
+    /// Override the active theme's cursor color, as `#rrggbb`. `None` uses
+    /// the theme's own cursor color.
+    #[serde(default)]
+    pub cursor_color: Option<String>,
 }
 
 impl Default for Settings {
@@ -108,6 +113,7 @@ impl Default for Settings {
             default_rows: default_rows(),
             confirm_close_tab: default_confirm_close_tab(),
             show_breadcrumb: default_show_breadcrumb(),
+            cursor_color: None,
         }
     }
 }
@@ -140,15 +146,22 @@ impl Settings {
     }
 
     /// Resolve the configured theme (built-in or user TOML), falling back
-    /// to Campbell when the name is unknown.
+    /// to Campbell when the name is unknown, with `cursor_color` (if set
+    /// and valid) overriding the theme's own cursor color.
     pub fn theme(&self) -> coast_themes::Theme {
-        if let Some(theme) = coast_themes::Theme::find(&self.theme) {
-            return theme;
+        let mut theme = coast_themes::Theme::find(&self.theme)
+            .or_else(|| load_user_theme(&self.theme))
+            .unwrap_or_else(|| {
+                coast_themes::Theme::find("Campbell").expect("Campbell is built in")
+            });
+        if let Some(color) = self
+            .cursor_color
+            .as_deref()
+            .and_then(|c| c.parse::<coast_themes::Color>().ok())
+        {
+            theme.cursor = color;
         }
-        if let Some(theme) = load_user_theme(&self.theme) {
-            return theme;
-        }
-        coast_themes::Theme::find("Campbell").expect("Campbell is built in")
+        theme
     }
 
     /// Resolve the configured chrome (titlebar/tab strip) theme, built-in or
@@ -320,6 +333,30 @@ mod tests {
             ..Settings::default()
         };
         assert_eq!(s.theme().name, "Campbell");
+    }
+
+    #[test]
+    fn cursor_color_overrides_theme_cursor() {
+        let base = Settings::default().theme();
+        let s = Settings {
+            cursor_color: Some("#ff9900".to_string()),
+            ..Settings::default()
+        };
+        let themed = s.theme();
+        assert_eq!(themed.cursor, "#ff9900".parse().unwrap());
+        assert_ne!(themed.cursor, base.cursor);
+        // Everything else about the theme is untouched.
+        assert_eq!(themed.background, base.background);
+    }
+
+    #[test]
+    fn invalid_cursor_color_falls_back_to_theme_default() {
+        let base = Settings::default().theme();
+        let s = Settings {
+            cursor_color: Some("not-a-color".to_string()),
+            ..Settings::default()
+        };
+        assert_eq!(s.theme().cursor, base.cursor);
     }
 
     #[test]

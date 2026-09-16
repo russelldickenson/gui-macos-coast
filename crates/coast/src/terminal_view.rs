@@ -798,6 +798,12 @@ impl Element for TerminalElement {
         let mut shaped: Vec<(Point<Pixels>, ShapedLine)> = Vec::new();
         let mut cursor_quad = None;
         let (cursor_shape, cursor_line, cursor_col) = cursor;
+        // Only a solid Block cursor should recolor the cell it sits on
+        // (inverting fg/bg so the character reads inside the block); Beam
+        // and Underline are thin decorations painted separately as a quad
+        // and must leave the character's own colors alone, or the whole
+        // cell reads as a solid, too-dark block instead of a thin line.
+        let invert_cursor_cell = matches!(cursor_shape, CursorShape::Block);
 
         for (row_ix, snapshot) in row_snapshots.iter().enumerate().take(rows as usize) {
             let y = content_bounds.origin.y + cell.height * row_ix as f32;
@@ -809,7 +815,7 @@ impl Element for TerminalElement {
                 row_ix as i32,
                 cursor_line,
                 cursor_col,
-                cursor_visible && focused,
+                cursor_visible && focused && invert_cursor_cell,
             );
             if text.is_empty() {
                 continue;
@@ -821,7 +827,8 @@ impl Element for TerminalElement {
             shaped.push((point(content_bounds.origin.x, y), line));
         }
 
-        // Cursor block (the cursor cell itself is painted inverted in build_row).
+        // Cursor decoration: Block inverts the cell above (no quad needed);
+        // everything else is drawn here as its own quad/outline.
         if cursor_visible
             && focused
             && cursor_line >= 0
@@ -832,19 +839,35 @@ impl Element for TerminalElement {
                 content_bounds.origin.x + cell.width * cursor_col as f32,
                 content_bounds.origin.y + cell.height * cursor_line as f32,
             );
-            let quad_bounds = match cursor_shape {
-                CursorShape::Block | CursorShape::HollowBlock => {
-                    Bounds::new(origin, Size::new(cell.width, cell.height))
+            // A solid Block cursor needs no quad at all: build_row already
+            // paints that cell with its colors inverted (cursor color as
+            // the background, cursor_text as the glyph color), so the
+            // character stays visible *inside* the cursor. Painting an
+            // opaque quad on top here — after the text has already been
+            // shaped with those colors — would just blot the glyph out.
+            // HollowBlock only outlines the cell for the same reason.
+            match cursor_shape {
+                CursorShape::Block => {}
+                CursorShape::HollowBlock => {
+                    let bounds = Bounds::new(origin, Size::new(cell.width, cell.height));
+                    cursor_quad = Some(gpui::outline(
+                        bounds,
+                        colors::hsla(theme.cursor),
+                        gpui::BorderStyle::Solid,
+                    ));
                 }
-                CursorShape::Beam => Bounds::new(origin, Size::new(px(2.), cell.height)),
-                CursorShape::Underline => Bounds::new(
-                    point(origin.x, origin.y + cell.height - px(2.)),
-                    Size::new(cell.width, px(2.)),
-                ),
-                CursorShape::Hidden => Bounds::new(origin, Size::new(px(0.), px(0.))),
-            };
-            if !matches!(cursor_shape, CursorShape::Hidden) {
-                cursor_quad = Some(fill(quad_bounds, colors::hsla(theme.cursor)));
+                CursorShape::Beam => {
+                    let bounds = Bounds::new(origin, Size::new(px(2.), cell.height));
+                    cursor_quad = Some(fill(bounds, colors::hsla(theme.cursor)));
+                }
+                CursorShape::Underline => {
+                    let bounds = Bounds::new(
+                        point(origin.x, origin.y + cell.height - px(2.)),
+                        Size::new(cell.width, px(2.)),
+                    );
+                    cursor_quad = Some(fill(bounds, colors::hsla(theme.cursor)));
+                }
+                CursorShape::Hidden => {}
             }
         }
 

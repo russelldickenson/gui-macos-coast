@@ -745,6 +745,8 @@ dependencies = [
  "coast-themes",
  "core-text",
  "gpui",
+ "objc2",
+ "objc2-app-kit",
  "terminal-core",
  "toml 0.8.23",
 ]

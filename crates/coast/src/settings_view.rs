@@ -95,6 +95,13 @@ fn installed_monospace_families() -> Vec<String> {
     families
 }
 
+/// Whether a `radio_group`'s options stack vertically or sit side by side.
+#[derive(Clone, Copy, PartialEq)]
+enum RadioLayout {
+    Vertical,
+    Horizontal,
+}
+
 /// Which dropdown (if any) is currently open. Only one at a time.
 #[derive(Clone, Copy, PartialEq)]
 enum OpenDropdown {
@@ -113,6 +120,7 @@ pub struct SettingsView {
     chrome_focus: FocusHandle,
     cursor_shape_focus: FocusHandle,
     cursor_blink_focus: FocusHandle,
+    cursor_color_focus: FocusHandle,
     font_family_focus: FocusHandle,
     font_size_focus: FocusHandle,
     confirm_close_focus: FocusHandle,
@@ -123,6 +131,8 @@ pub struct SettingsView {
     rows_text: String,
     scrollback_field: TextField,
     scrollback_text: String,
+    cursor_color_field: TextField,
+    cursor_color_text: String,
     open_dropdown: OpenDropdown,
     dropdown_highlight: usize,
     saved_visible: bool,
@@ -132,6 +142,10 @@ pub struct SettingsView {
     /// next to the button.
     import_status: Option<(bool, SharedString)>,
     import_epoch: u64,
+    /// Bumped whenever the native color panel is (re-)opened, so a stale
+    /// poll loop from an earlier open stops instead of fighting a newer one.
+    color_panel_epoch: u64,
+    scroll_handle: ScrollHandle,
 }
 
 impl SettingsView {
@@ -150,6 +164,7 @@ impl SettingsView {
             cols_text: settings.default_cols.to_string(),
             rows_text: settings.default_rows.to_string(),
             scrollback_text: settings.scrollback_lines.to_string(),
+            cursor_color_text: settings.cursor_color.clone().unwrap_or_default(),
             settings,
             workspace,
             available_fonts,
@@ -157,6 +172,7 @@ impl SettingsView {
             chrome_focus: cx.focus_handle(),
             cursor_shape_focus: cx.focus_handle(),
             cursor_blink_focus: cx.focus_handle(),
+            cursor_color_focus: cx.focus_handle(),
             font_family_focus: cx.focus_handle(),
             font_size_focus: cx.focus_handle(),
             confirm_close_focus: cx.focus_handle(),
@@ -164,6 +180,7 @@ impl SettingsView {
             cols_field: TextField::new(cx),
             rows_field: TextField::new(cx),
             scrollback_field: TextField::new(cx),
+            cursor_color_field: TextField::new(cx),
             open_dropdown: OpenDropdown::None,
             dropdown_highlight: 0,
             saved_visible: false,
@@ -171,6 +188,8 @@ impl SettingsView {
             import_focus: cx.focus_handle(),
             import_status: None,
             import_epoch: 0,
+            color_panel_epoch: 0,
+            scroll_handle: ScrollHandle::new(),
         }
     }
 
@@ -194,6 +213,71 @@ impl SettingsView {
         })
         .detach();
         cx.notify();
+    }
+
+    /// Open the native macOS color panel seeded with the current cursor
+    /// color, and poll it while visible so picks apply live. There's no
+    /// target/action callback wired up (that needs a custom Objective-C
+    /// class), so a lightweight poll is the simplest way to notice changes.
+    fn open_cursor_color_picker(&mut self, cx: &mut Context<Self>) {
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::{NSColor, NSColorSpace};
+
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let panel = objc2_app_kit::NSColorPanel::sharedColorPanel(mtm);
+        let current = self.settings.theme().cursor;
+        let ns_color = NSColor::colorWithRed_green_blue_alpha(
+            current.r as f64 / 255.,
+            current.g as f64 / 255.,
+            current.b as f64 / 255.,
+            1.0,
+        );
+        panel.setColor(&ns_color);
+        panel.orderFront(None);
+
+        self.color_panel_epoch = self.color_panel_epoch.wrapping_add(1);
+        let epoch = self.color_panel_epoch;
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(120))
+                .await;
+            let alive = this
+                .update(cx, |this, cx| {
+                    if this.color_panel_epoch != epoch {
+                        return false;
+                    }
+                    let Some(mtm) = MainThreadMarker::new() else {
+                        return false;
+                    };
+                    let panel = objc2_app_kit::NSColorPanel::sharedColorPanel(mtm);
+                    if !panel.isVisible() {
+                        return false;
+                    }
+                    let color = panel.color();
+                    if let Some(srgb) = color.colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())
+                    {
+                        let hex = coast_themes::Color::new(
+                            (srgb.redComponent() * 255.).round() as u8,
+                            (srgb.greenComponent() * 255.).round() as u8,
+                            (srgb.blueComponent() * 255.).round() as u8,
+                        )
+                        .to_hex();
+                        if this.cursor_color_text != hex {
+                            this.cursor_color_text = hex.clone();
+                            this.settings.cursor_color = Some(hex);
+                            this.commit(cx);
+                        }
+                    }
+                    true
+                })
+                .unwrap_or(false);
+            if !alive {
+                break;
+            }
+        })
+        .detach();
     }
 
     /// Open a file picker and, if the user selects a file, try to import it
@@ -336,6 +420,7 @@ impl Render for SettingsView {
                         next: &self.cursor_shape_focus,
                         prev: &self.import_focus,
                     },
+                    RadioLayout::Horizontal,
                     cx,
                 )
                 .into_any_element(),
@@ -366,6 +451,7 @@ impl Render for SettingsView {
                         next: &self.cursor_blink_focus,
                         prev: &self.chrome_focus,
                     },
+                    RadioLayout::Horizontal,
                     cx,
                 )
                 .into_any_element(),
@@ -378,7 +464,7 @@ impl Render for SettingsView {
                     Nav {
                         focus: &self.cursor_blink_focus,
                         is_focused: focused_field(&self.cursor_blink_focus),
-                        next: &self.font_family_focus,
+                        next: &self.cursor_color_focus,
                         prev: &self.cursor_shape_focus,
                     },
                     |this, _window, cx| {
@@ -388,6 +474,59 @@ impl Render for SettingsView {
                     cx,
                 )
                 .into_any_element(),
+            ),
+            setting_row(
+                "Color",
+                Some("Type a hex value or click the swatch to pick one. Leave blank for the theme's own color."),
+                gpui::div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .child(text_field(
+                        self.cursor_color_text.clone(),
+                        &self.cursor_color_field.focus,
+                        focused_field(&self.cursor_color_field.focus),
+                        cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                            if handle_tab_navigation(
+                                &ev.keystroke,
+                                window,
+                                &this.font_family_focus,
+                                &this.cursor_blink_focus,
+                            ) {
+                                return;
+                            }
+                            if edit_text(&mut this.cursor_color_text, &ev.keystroke) {
+                                let trimmed = this.cursor_color_text.trim().to_string();
+                                if trimmed.is_empty() {
+                                    this.settings.cursor_color = None;
+                                    this.commit(cx);
+                                } else if trimmed.parse::<coast_themes::Color>().is_ok() {
+                                    this.settings.cursor_color = Some(trimmed);
+                                    this.commit(cx);
+                                } else {
+                                    cx.notify();
+                                }
+                            }
+                        }),
+                    ))
+                    .child(
+                        gpui::div()
+                            .id("cursor-color-swatch")
+                            .size(px(18.))
+                            .rounded_md()
+                            .cursor_pointer()
+                            .border_1()
+                            .border_color(rgb(FIELD_BORDER))
+                            .bg(rgb(self.settings.theme().cursor.rgb()))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _window, cx| {
+                                    this.open_cursor_color_picker(cx)
+                                }),
+                            ),
+                    )
+                    .into_any_element(),
             ),
         ]);
 
@@ -541,9 +680,10 @@ impl Render for SettingsView {
             ),
         ]);
 
-        div()
+        let scrollable = div()
             .id("settings-root")
             .track_focus(&self.focus_handle(cx))
+            .track_scroll(&self.scroll_handle)
             .size_full()
             .bg(rgb(PAGE_BG))
             .p_6()
@@ -587,35 +727,95 @@ impl Render for SettingsView {
             )
             .child(
                 div()
+                    .w_full()
                     .flex()
                     .flex_row()
                     .gap_6()
-                    .child(section("Appearance", appearance_card))
-                    .child(section("Cursor", cursor_card)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap_6()
-                    .child(section("Font", font_card))
-                    .child(section("Window", window_card)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap_6()
-                    .child(section("Scrollback", scrollback_card))
-                    .child(section("Behavior", behavior_card)),
-            )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap_6()
+                            .child(section("Appearance", appearance_card))
+                            .child(section("Font", font_card))
+                            .child(section("Cursor", cursor_card)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap_6()
+                            .child(section("Window", window_card))
+                            .child(section("Behavior", behavior_card))
+                            .child(section("Scrollback", scrollback_card)),
+                    ),
+            );
+
+        gpui::div()
+            .relative()
+            .size_full()
+            .child(scrollable)
+            .child(settings_scrollbar(&self.scroll_handle))
     }
+}
+
+/// A thin, always-visible-when-needed vertical scrollbar for the settings
+/// page, driven by the root's `ScrollHandle`. Unlike the terminal's overlay
+/// scrollbar this isn't auto-hiding — a plain preferences page doesn't need
+/// the macOS overlay flash/fade treatment, just a visible affordance that
+/// there's more content when the page doesn't fit.
+fn settings_scrollbar(handle: &ScrollHandle) -> impl IntoElement {
+    let max_offset = handle.max_offset().height;
+    if max_offset <= px(0.) {
+        return gpui::div();
+    }
+
+    let viewport_height = f32::from(handle.bounds().size.height).max(1.);
+    // `offset` counts negative as scrolled down.
+    let scrolled = f32::from((-handle.offset().y).clamp(px(0.), max_offset));
+    let above = scrolled;
+    let below = (f32::from(max_offset) - scrolled).max(0.);
+
+    let spacer = |weight: f32| {
+        let mut el = gpui::div();
+        el.style().flex_grow = Some(weight.max(0.0001));
+        el.style().flex_shrink = Some(0.);
+        el.style().flex_basis = Some(relative(0.).into());
+        el
+    };
+    let mut thumb = gpui::div();
+    thumb.style().flex_grow = Some(viewport_height.max(0.0001));
+    thumb.style().flex_shrink = Some(0.);
+    thumb.style().flex_basis = Some(relative(0.).into());
+
+    gpui::div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .right_0()
+        .w(px(8.))
+        .py(px(2.))
+        .flex()
+        .flex_col()
+        .child(spacer(above))
+        .child(
+            thumb
+                .min_h(px(24.))
+                .mx(px(2.))
+                .rounded_full()
+                .bg(rgb(FIELD_BORDER)),
+        )
+        .child(spacer(below))
 }
 
 /// A section label above a card, matching a native preferences pane.
 fn section(title: &'static str, card: impl IntoElement) -> impl IntoElement {
     div()
-        .flex_1()
+        .w_full()
         .flex()
         .flex_col()
         .gap_2()
@@ -633,6 +833,7 @@ fn section(title: &'static str, card: impl IntoElement) -> impl IntoElement {
 /// hairlines.
 fn card(rows: Vec<impl IntoElement>) -> impl IntoElement {
     let mut container = div()
+        .w_full()
         .flex()
         .flex_col()
         .rounded_lg()
@@ -658,6 +859,8 @@ fn setting_row(
     control: AnyElement,
 ) -> impl IntoElement {
     let mut text_col = div()
+        .flex_1()
+        .min_w_0()
         .flex()
         .flex_col()
         .gap_1()
@@ -792,14 +995,6 @@ fn toggle_switch(
         .rounded_full()
         .p(px(2.))
         .bg(rgb(if is_on { ACCENT } else { 0xe4e4e6 }))
-        .when(nav.is_focused, |d| {
-            d.shadow(vec![BoxShadow {
-                color: Hsla::from(rgb(FIELD_BORDER_FOCUSED)).opacity(0.5),
-                offset: point(px(0.), px(0.)),
-                blur_radius: px(0.),
-                spread_radius: px(3.),
-            }])
-        })
         .flex()
         .flex_row()
         .cursor_pointer()
@@ -994,6 +1189,7 @@ fn radio_group<T: Clone + 'static>(
     selected: impl Fn(&T) -> bool,
     on_select: impl Fn(&mut SettingsView, T, &mut Window, &mut Context<SettingsView>) + 'static + Clone,
     nav: Nav,
+    layout: RadioLayout,
     cx: &mut Context<SettingsView>,
 ) -> impl IntoElement {
     let current_ix = options.iter().position(|(v, _)| selected(v)).unwrap_or(0);
@@ -1035,8 +1231,10 @@ fn radio_group<T: Clone + 'static>(
             Hsla::transparent_black()
         })
         .flex()
-        .flex_col()
-        .gap_2();
+        .when(layout == RadioLayout::Horizontal, |d| {
+            d.flex_row().gap_4()
+        })
+        .when(layout == RadioLayout::Vertical, |d| d.flex_col().gap_2());
     for (value, label) in options {
         let is_selected = selected(value);
         let value = value.clone();
@@ -1161,7 +1359,7 @@ fn font_family_dropdown(
             focus: &view.font_family_focus,
             is_focused,
             next: &view.font_size_focus,
-            prev: &view.cursor_blink_focus,
+            prev: &view.cursor_color_focus,
         },
         cx,
     )

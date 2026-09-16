@@ -562,7 +562,12 @@ impl Render for Workspace {
                     ),
             );
 
-        let body = div().flex_1().w_full();
+        // `min_h_0()` overrides the flex-item default of min-height:auto
+        // (content's own height), which would otherwise stop this from
+        // ever shrinking below the settings page's full, unscrolled
+        // content height — the window could grow to fit it but never let
+        // it scroll within the available space instead.
+        let body = div().flex_1().w_full().min_h_0();
         let body = match self.tabs.get(active).map(|tab| &tab.kind) {
             Some(TabKind::Terminal(view)) => body.child(view.clone()),
             Some(TabKind::Settings(view)) => body.child(view.clone()),
