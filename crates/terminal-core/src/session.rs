@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use alacritty_terminal::{
     event::{Event, EventListener},
+    grid::{Dimensions, Scroll},
     term::{test::TermSize, Config},
     vte::ansi::{CursorShape, CursorStyle, Processor},
     Term,
@@ -315,6 +316,30 @@ impl Session {
 
     pub fn rows(&self) -> u16 {
         self.dims.lock().expect("session dims poisoned").1
+    }
+
+    /// Scroll the viewport by `delta` lines (positive scrolls back into
+    /// history, negative scrolls forward toward the live output).
+    pub fn scroll_lines(&self, delta: i32) {
+        if let Ok(mut term) = self.term.lock() {
+            term.scroll_display(Scroll::Delta(delta));
+        }
+    }
+
+    /// Jump straight back to the live output (bottom of scrollback).
+    pub fn scroll_to_bottom(&self) {
+        if let Ok(mut term) = self.term.lock() {
+            term.scroll_display(Scroll::Bottom);
+        }
+    }
+
+    /// How far back the viewport is scrolled, and how many lines of
+    /// scrollback history are available — for driving a scrollbar.
+    pub fn scroll_position(&self) -> (usize, usize) {
+        self.with_term(|term| {
+            let grid = term.grid();
+            (grid.display_offset(), grid.history_size())
+        })
     }
 }
 

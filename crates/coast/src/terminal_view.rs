@@ -14,7 +14,8 @@ use gpui::{
     fill, point, prelude::*, px, relative, App, Bounds, Context, Element, ElementId, Entity,
     EventEmitter, FocusHandle, Focusable, Font, FontStyle, FontWeight, GlobalElementId, Hsla,
     InspectorElementId, IntoElement, KeyDownEvent, Keystroke, LayoutId, PaintQuad, Pixels, Point,
-    ShapedLine, SharedString, Size, StrikethroughStyle, Style, TextRun, UnderlineStyle, Window,
+    ScrollWheelEvent, ShapedLine, SharedString, Size, StrikethroughStyle, Style, TextRun,
+    UnderlineStyle, Window,
 };
 
 use crate::colors;
@@ -71,6 +72,14 @@ pub struct TerminalView {
     /// which happens on every new tab, not just a real user resize) so the
     /// resize HUD only fires for genuine window resizes.
     has_resized_once: bool,
+    /// Whether the overlay scrollbar is currently shown, macOS-style: it
+    /// flashes in while scrolling and fades out shortly after, or stays up
+    /// while the pointer is over it.
+    scrollbar_visible: bool,
+    /// Bumped on every scroll so a stale auto-hide timer from an earlier
+    /// scroll can't hide the bar out from under a newer one.
+    scrollbar_epoch: u64,
+    scrollbar_hovered: bool,
 }
 
 impl TerminalView {
@@ -100,6 +109,9 @@ impl TerminalView {
             exited: None,
             traced_output: false,
             has_resized_once: false,
+            scrollbar_visible: false,
+            scrollbar_epoch: 0,
+            scrollbar_hovered: false,
         };
         this.spawn_poll(cx);
         this
@@ -140,6 +152,9 @@ impl TerminalView {
             eprintln!("[coast] keystroke ignored, session exited");
             return;
         }
+        // Typing while scrolled back into history jumps back to the live
+        // output, matching every other terminal.
+        self.session.scroll_to_bottom();
         match crate::keys::keystroke_to_bytes(ks) {
             Some(bytes) => {
                 if let Err(err) = self.session.write(&bytes) {
@@ -207,6 +222,29 @@ impl TerminalView {
     fn base_font(&self) -> Font {
         gpui::font(self.font_family.clone())
     }
+
+    /// Show the overlay scrollbar, auto-hiding it again ~1s after the last
+    /// scroll (unless the pointer is hovering it, which keeps it up).
+    fn flash_scrollbar(&mut self, cx: &mut Context<Self>) {
+        self.scrollbar_visible = true;
+        self.scrollbar_epoch = self.scrollbar_epoch.wrapping_add(1);
+        let epoch = self.scrollbar_epoch;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(1000))
+                .await;
+            this.update(cx, |this, cx| {
+                if this.scrollbar_epoch != epoch || this.scrollbar_hovered {
+                    return;
+                }
+                this.scrollbar_visible = false;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
 }
 
 impl Focusable for TerminalView {
@@ -217,14 +255,91 @@ impl Focusable for TerminalView {
 
 impl Render for TerminalView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        gpui::div()
+        let line_height = self.cell_size.height.max(px(1.));
+        let content = gpui::div()
+            .id("terminal-content")
             .track_focus(&self.focus_handle)
             .size_full()
             .on_key_down(cx.listener(|view, event: &KeyDownEvent, _window, _cx| {
                 view.handle_keystroke(&event.keystroke);
             }))
-            .child(TerminalElement { view: cx.entity() })
+            .on_scroll_wheel(cx.listener(move |view, event: &ScrollWheelEvent, _window, cx| {
+                let delta = event.delta.pixel_delta(line_height).y;
+                let lines = (delta / line_height).round() as i32;
+                if lines != 0 {
+                    view.session.scroll_lines(lines);
+                    view.flash_scrollbar(cx);
+                }
+            }))
+            .child(TerminalElement { view: cx.entity() });
+
+        let show_scrollbar = self.scrollbar_visible || self.scrollbar_hovered;
+
+        gpui::div()
+            .relative()
+            .size_full()
+            .child(content)
+            .child(scrollbar(&self.session, show_scrollbar, cx))
     }
+}
+
+/// A macOS-style overlay scrollbar: a translucent capsule floating over the
+/// right edge of the content (no layout width reserved for it), hidden by
+/// default and only shown by `TerminalView::flash_scrollbar` — while
+/// scrolling, or while the pointer is over it. Its size/position are driven
+/// by flex-grow weights on two invisible spacers above/below the thumb, so
+/// no pixel-height bookkeeping is needed.
+fn scrollbar(session: &Session, visible: bool, cx: &mut Context<TerminalView>) -> impl IntoElement {
+    let rows = session.rows().max(1) as f32;
+    let (offset, history) = session.scroll_position();
+    let above = (history.saturating_sub(offset)) as f32;
+    let below = offset as f32;
+
+    let spacer = |weight: f32| {
+        let mut el = gpui::div();
+        el.style().flex_grow = Some(weight.max(0.0001));
+        el.style().flex_shrink = Some(0.);
+        el.style().flex_basis = Some(relative(0.).into());
+        el
+    };
+    let mut thumb = gpui::div();
+    thumb.style().flex_grow = Some(rows.max(0.0001));
+    thumb.style().flex_shrink = Some(0.);
+    thumb.style().flex_basis = Some(relative(0.).into());
+
+    gpui::div()
+        .id("terminal-scrollbar")
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .right_0()
+        .w(px(14.))
+        .py(px(2.))
+        .opacity(if visible { 1. } else { 0. })
+        .on_hover(cx.listener(|view, hovered: &bool, _window, cx| {
+            view.scrollbar_hovered = *hovered;
+            if *hovered {
+                view.flash_scrollbar(cx);
+            } else {
+                cx.notify();
+            }
+        }))
+        .flex()
+        .flex_col()
+        .child(spacer(above))
+        .child(
+            thumb
+                .min_h(px(24.))
+                .mx(px(2.))
+                .rounded_full()
+                .bg(Hsla {
+                    h: 0.,
+                    s: 0.,
+                    l: 0.78,
+                    a: 0.6,
+                }),
+        )
+        .child(spacer(below))
 }
 
 /// One visible row copied out of the grid (lock-free shaping afterwards).
