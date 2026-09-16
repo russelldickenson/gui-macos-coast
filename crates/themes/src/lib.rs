@@ -12,6 +12,7 @@
 
 mod builtin;
 mod chrome;
+mod terminal_import;
 
 use std::fmt;
 use std::str::FromStr;
@@ -20,6 +21,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub use builtin::builtin_themes;
 pub use chrome::{builtin_chrome_themes, ChromeTheme};
+pub use terminal_import::import_terminal_file;
 
 /// An sRGB color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,6 +141,16 @@ impl Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "manual sanity check against a real .terminal file on this machine"]
+    fn scratch_import_real_terminal_file() {
+        let theme = import_terminal_file(std::path::Path::new(
+            "/Users/russell/Downloads/macOS - terminal - Nord theme.terminal",
+        ))
+        .expect("import");
+        println!("{theme:#?}");
+    }
 
     #[test]
     fn color_hex_roundtrip() {

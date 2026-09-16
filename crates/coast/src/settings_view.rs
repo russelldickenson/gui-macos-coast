@@ -126,6 +126,11 @@ pub struct SettingsView {
     dropdown_highlight: usize,
     saved_visible: bool,
     page_focus: FocusHandle,
+    import_focus: FocusHandle,
+    /// Result of the most recent "Import Theme..." attempt, shown briefly
+    /// next to the button.
+    import_status: Option<(bool, SharedString)>,
+    import_epoch: u64,
 }
 
 impl SettingsView {
@@ -161,6 +166,9 @@ impl SettingsView {
             dropdown_highlight: 0,
             saved_visible: false,
             page_focus: cx.focus_handle(),
+            import_focus: cx.focus_handle(),
+            import_status: None,
+            import_epoch: 0,
         }
     }
 
@@ -179,6 +187,62 @@ impl SettingsView {
             this.update(cx, |this, cx| {
                 this.saved_visible = false;
                 cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Open a file picker and, if the user selects a file, try to import it
+    /// as a Terminal.app `.terminal` theme.
+    fn import_theme(&mut self, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(SharedString::new_static("Import")),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(mut paths))) = receiver.await else {
+                return;
+            };
+            let Some(path) = paths.pop() else { return };
+            this.update(cx, |this, cx| this.finish_import(path, cx)).ok();
+        })
+        .detach();
+    }
+
+    fn finish_import(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
+        match coast_themes::import_terminal_file(&path) {
+            Ok(mut theme) => {
+                theme.name = theme.name.replace('/', "-");
+                if let Err(err) = coast_settings::save_user_theme(&theme) {
+                    self.set_import_status(false, format!("Couldn't save theme: {err:#}"), cx);
+                    return;
+                }
+                let name = theme.name.clone();
+                self.settings.theme = name.clone();
+                self.commit(cx);
+                self.set_import_status(true, format!("Imported \"{name}\""), cx);
+            }
+            Err(err) => self.set_import_status(false, format!("Import failed: {err:#}"), cx),
+        }
+    }
+
+    fn set_import_status(&mut self, ok: bool, message: String, cx: &mut Context<Self>) {
+        self.import_status = Some((ok, SharedString::new(message)));
+        self.import_epoch = self.import_epoch.wrapping_add(1);
+        let epoch = self.import_epoch;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(4000))
+                .await;
+            this.update(cx, |this, cx| {
+                if this.import_epoch == epoch {
+                    this.import_status = None;
+                    cx.notify();
+                }
             })
             .ok();
         })
@@ -223,7 +287,30 @@ impl Render for SettingsView {
             setting_row(
                 "Color theme",
                 None,
-                theme_dropdown(self, focused_field(&self.theme_focus), cx).into_any_element(),
+                gpui::div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .child(theme_dropdown(self, focused_field(&self.theme_focus), cx))
+                    .child(import_theme_button(
+                        Nav {
+                            focus: &self.import_focus,
+                            is_focused: focused_field(&self.import_focus),
+                            next: &self.chrome_focus,
+                            prev: &self.theme_focus,
+                        },
+                        cx,
+                    ))
+                    .when_some(self.import_status.clone(), |row, (ok, message)| {
+                        row.child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(if ok { 0x1a9c4b } else { 0xd64545 }))
+                                .child(message),
+                        )
+                    })
+                    .into_any_element(),
             ),
             setting_row(
                 "Titlebar",
@@ -245,7 +332,7 @@ impl Render for SettingsView {
                         focus: &self.chrome_focus,
                         is_focused: focused_field(&self.chrome_focus),
                         next: &self.cursor_shape_focus,
-                        prev: &self.theme_focus,
+                        prev: &self.import_focus,
                     },
                     cx,
                 )
@@ -615,6 +702,45 @@ fn text_field(
         })
 }
 
+/// The "Import..." button next to the color theme dropdown: opens a file
+/// picker for a Terminal.app `.terminal` file and imports it as a user
+/// theme (see `SettingsView::import_theme`).
+fn import_theme_button(nav: Nav, cx: &mut Context<SettingsView>) -> impl IntoElement {
+    let next = nav.next.clone();
+    let prev = nav.prev.clone();
+    div()
+        .id("import-theme-button")
+        .track_focus(nav.focus)
+        .on_key_down(cx.listener(move |this, ev: &KeyDownEvent, window, cx| {
+            if handle_tab_navigation(&ev.keystroke, window, &next, &prev) {
+                return;
+            }
+            if ev.keystroke.key == "space" || ev.keystroke.key == "enter" {
+                this.import_theme(cx);
+            }
+        }))
+        .flex_none()
+        .px_3()
+        .py_1()
+        .rounded_md()
+        .border_1()
+        .border_color(rgb(if nav.is_focused {
+            FIELD_BORDER_FOCUSED
+        } else {
+            FIELD_BORDER
+        }))
+        .bg(rgb(FIELD_BG))
+        .text_sm()
+        .text_color(rgb(LABEL_COLOR))
+        .cursor_pointer()
+        .hover(|s| s.bg(rgb(CARD_BORDER)))
+        .child("Import\u{2026}")
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, _window, cx| this.import_theme(cx)),
+        )
+}
+
 /// An iOS-style on/off switch.
 fn toggle_switch(
     is_on: bool,
@@ -625,6 +751,8 @@ fn toggle_switch(
     let mouse_toggle = on_toggle.clone();
     let next = nav.next.clone();
     let prev = nav.prev.clone();
+    // macOS switch proportions: ~36x20 track, 16px knob, 2px inset all
+    // round, so the knob sits flush with the track's curve in both states.
     div()
         .track_focus(nav.focus)
         .on_key_down(cx.listener(move |this, ev: &KeyDownEvent, window, cx| {
@@ -636,28 +764,30 @@ fn toggle_switch(
             }
         }))
         .flex_none()
-        .w(px(40.))
-        .h(px(22.))
+        .w(px(36.))
+        .h(px(20.))
         .rounded_full()
         .p(px(2.))
-        .border_2()
-        .border_color(if nav.is_focused {
-            Hsla::from(rgb(FIELD_BORDER_FOCUSED))
-        } else {
-            Hsla::transparent_black()
+        .bg(rgb(if is_on { ACCENT } else { 0xe4e4e6 }))
+        .when(nav.is_focused, |d| {
+            d.shadow(vec![BoxShadow {
+                color: Hsla::from(rgb(FIELD_BORDER_FOCUSED)).opacity(0.5),
+                offset: point(px(0.), px(0.)),
+                blur_radius: px(0.),
+                spread_radius: px(3.),
+            }])
         })
-        .bg(rgb(if is_on { ACCENT } else { FIELD_BORDER }))
         .flex()
         .flex_row()
         .cursor_pointer()
         .when(is_on, |d| d.justify_end())
         .when(!is_on, |d| d.justify_start())
-        .child(
-            div()
-                .size(px(18.))
-                .rounded_full()
-                .bg(rgb(0xffffff)),
-        )
+        .child(div().size(px(16.)).rounded_full().bg(rgb(0xffffff)).shadow(vec![BoxShadow {
+            color: Hsla::from(rgb(0x000000)).opacity(0.25),
+            offset: point(px(0.), px(1.)),
+            blur_radius: px(1.),
+            spread_radius: px(0.),
+        }]))
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, _, window, cx| mouse_toggle(this, window, cx)),
@@ -931,10 +1061,15 @@ fn theme_dropdown(
     is_focused: bool,
     cx: &mut Context<SettingsView>,
 ) -> impl IntoElement {
-    let options: Vec<(String, String)> = coast_themes::builtin_themes()
+    let mut options: Vec<(String, String)> = coast_themes::builtin_themes()
         .into_iter()
         .map(|t| (t.name.clone(), t.name))
         .collect();
+    for name in coast_settings::user_theme_names() {
+        if !options.iter().any(|(_, value)| *value == name) {
+            options.push((name.clone(), name));
+        }
+    }
     let current = view.settings.theme.clone();
     let current_label = current.clone();
     dropdown(
@@ -960,7 +1095,7 @@ fn theme_dropdown(
         Nav {
             focus: &view.theme_focus,
             is_focused,
-            next: &view.chrome_focus,
+            next: &view.import_focus,
             prev: &view.confirm_close_focus,
         },
         cx,

@@ -16,3 +16,4 @@ terminal-core = { path = "../terminal-core" }
 coast-themes = { path = "../themes" }
 coast-settings = { path = "../settings" }
 anyhow.workspace = true
+toml.workspace = true

@@ -170,6 +170,35 @@ fn load_user_theme(name: &str) -> Option<coast_themes::Theme> {
     toml::from_str(&raw).ok()
 }
 
+/// Names of every user theme saved under `themes/*.toml` (e.g. imported
+/// from a Terminal.app `.terminal` file), for listing alongside the
+/// built-ins.
+pub fn user_theme_names() -> Vec<String> {
+    let dir = support_dir().join("themes");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "toml"))
+        .filter_map(|entry| entry.path().file_stem().map(|s| s.to_string_lossy().to_string()))
+        .collect();
+    names.sort();
+    names
+}
+
+/// Write a theme to `themes/<name>.toml`, creating the directory if
+/// needed. `/` in the name is replaced so it can't escape the directory.
+pub fn save_user_theme(theme: &coast_themes::Theme) -> anyhow::Result<()> {
+    let safe_name = theme.name.replace('/', "-");
+    let path = user_theme_path(&safe_name);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(path, toml::to_string_pretty(theme)?)?;
+    Ok(())
+}
+
 /// `~/Library/Application Support/Coast/chrome-themes/<name>.toml`.
 pub fn user_chrome_theme_path(name: &str) -> PathBuf {
     support_dir()
@@ -278,5 +307,30 @@ mod tests {
             ..Settings::default()
         };
         assert_eq!(s.theme().name, "Campbell");
+    }
+
+    #[test]
+    #[ignore = "manual sanity check: imports a real .terminal file and round-trips it through save/load"]
+    fn scratch_import_save_load_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("coast-import-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        unsafe { std::env::set_var("HOME", &dir) };
+
+        let theme = coast_themes::import_terminal_file(std::path::Path::new(
+            "/Users/russell/Downloads/macOS - terminal - Nord theme.terminal",
+        ))
+        .expect("import");
+        save_user_theme(&theme).expect("save");
+
+        assert!(user_theme_names().contains(&theme.name));
+
+        let s = Settings {
+            theme: theme.name.clone(),
+            ..Settings::default()
+        };
+        assert_eq!(s.theme().name, theme.name);
+        assert_eq!(s.theme().background, theme.background);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
