@@ -177,6 +177,7 @@ impl Workspace {
                 theme,
                 settings.cursor_blink,
                 settings.show_breadcrumb,
+                settings.terminal_frame,
                 cx,
             )
         });
@@ -363,6 +364,7 @@ impl Workspace {
         let theme = self.theme.clone();
         let cursor_blink = self.settings.cursor_blink;
         let show_breadcrumb = self.settings.show_breadcrumb;
+        let terminal_frame = self.settings.terminal_frame;
         for tab in &self.tabs {
             if let TabKind::Terminal(view) = &tab.kind {
                 view.update(cx, |view, cx| {
@@ -372,6 +374,7 @@ impl Workspace {
                         theme.clone(),
                         cursor_blink,
                         show_breadcrumb,
+                        terminal_frame,
                         cx,
                     )
                 });
@@ -569,7 +572,30 @@ impl Render for Workspace {
         // it scroll within the available space instead.
         let body = div().flex_1().w_full().min_h_0();
         let body = match self.tabs.get(active).map(|tab| &tab.kind) {
-            Some(TabKind::Terminal(view)) => body.child(view.clone()),
+            Some(TabKind::Terminal(view)) => {
+                if self.settings.terminal_frame {
+                    // An extra, optional frame around the terminal itself —
+                    // on top of the inner padding TerminalElement already
+                    // draws between the window's own border and the grid —
+                    // colored to match the titlebar/tab strip and clipped
+                    // to rounded corners.
+                    body.child(
+                        div()
+                            .size_full()
+                            .bg(chrome_bar)
+                            .p(px(8.))
+                            .child(
+                                div()
+                                    .size_full()
+                                    .rounded_lg()
+                                    .overflow_hidden()
+                                    .child(view.clone()),
+                            ),
+                    )
+                } else {
+                    body.child(view.clone())
+                }
+            }
             Some(TabKind::Settings(view)) => body.child(view.clone()),
             None => body,
         };

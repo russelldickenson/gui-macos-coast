@@ -118,6 +118,7 @@ pub struct SettingsView {
 
     theme_focus: FocusHandle,
     chrome_focus: FocusHandle,
+    terminal_frame_focus: FocusHandle,
     cursor_shape_focus: FocusHandle,
     cursor_blink_focus: FocusHandle,
     cursor_color_focus: FocusHandle,
@@ -170,6 +171,7 @@ impl SettingsView {
             available_fonts,
             theme_focus: cx.focus_handle(),
             chrome_focus: cx.focus_handle(),
+            terminal_frame_focus: cx.focus_handle(),
             cursor_shape_focus: cx.focus_handle(),
             cursor_blink_focus: cx.focus_handle(),
             cursor_color_focus: cx.focus_handle(),
@@ -417,10 +419,29 @@ impl Render for SettingsView {
                     Nav {
                         focus: &self.chrome_focus,
                         is_focused: focused_field(&self.chrome_focus),
-                        next: &self.cursor_shape_focus,
+                        next: &self.terminal_frame_focus,
                         prev: &self.import_focus,
                     },
                     RadioLayout::Horizontal,
+                    cx,
+                )
+                .into_any_element(),
+            ),
+            setting_row(
+                "Framed terminal",
+                Some("Surround each tab's terminal with rounded, titlebar-colored padding."),
+                toggle_switch(
+                    self.settings.terminal_frame,
+                    Nav {
+                        focus: &self.terminal_frame_focus,
+                        is_focused: focused_field(&self.terminal_frame_focus),
+                        next: &self.cursor_shape_focus,
+                        prev: &self.chrome_focus,
+                    },
+                    |this, _window, cx| {
+                        this.settings.terminal_frame = !this.settings.terminal_frame;
+                        this.commit(cx);
+                    },
                     cx,
                 )
                 .into_any_element(),
@@ -449,7 +470,7 @@ impl Render for SettingsView {
                         focus: &self.cursor_shape_focus,
                         is_focused: focused_field(&self.cursor_shape_focus),
                         next: &self.cursor_blink_focus,
-                        prev: &self.chrome_focus,
+                        prev: &self.terminal_frame_focus,
                     },
                     RadioLayout::Horizontal,
                     cx,

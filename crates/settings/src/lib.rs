@@ -13,6 +13,7 @@
 //! confirm_close_tab = true
 //! show_breadcrumb = false
 //! cursor_color = "#ff9900" # omit to use the theme's own cursor color
+//! terminal_frame = false
 //! ```
 
 use std::path::PathBuf;
@@ -63,6 +64,10 @@ fn default_show_breadcrumb() -> bool {
     false
 }
 
+fn default_terminal_frame() -> bool {
+    false
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_font_family")]
@@ -97,6 +102,11 @@ pub struct Settings {
     /// the theme's own cursor color.
     #[serde(default)]
     pub cursor_color: Option<String>,
+    /// Surround each terminal tab's content with rounded, titlebar-colored
+    /// padding, on top of the existing inner padding between the window's
+    /// own border and the terminal content.
+    #[serde(default = "default_terminal_frame")]
+    pub terminal_frame: bool,
 }
 
 impl Default for Settings {
@@ -114,6 +124,7 @@ impl Default for Settings {
             confirm_close_tab: default_confirm_close_tab(),
             show_breadcrumb: default_show_breadcrumb(),
             cursor_color: None,
+            terminal_frame: default_terminal_frame(),
         }
     }
 }
@@ -261,6 +272,7 @@ mod tests {
         assert_eq!(s.default_rows, 30);
         assert!(s.confirm_close_tab);
         assert!(!s.show_breadcrumb);
+        assert!(!s.terminal_frame);
     }
 
     #[test]
