@@ -8,11 +8,52 @@ use std::time::Duration;
 
 use gpui::{prelude::*, *};
 
+use crate::settings_view::SettingsView;
 use crate::terminal_view::TerminalView;
-use terminal_core::{Session, SpawnOptions};
+use terminal_core::{CursorShape, Session, SpawnOptions};
+
+/// Maps a `Settings::cursor_shape` string to alacritty's cursor shape,
+/// defaulting to `Block` for anything unrecognized.
+fn cursor_shape_from_setting(setting: &str) -> CursorShape {
+    match setting {
+        "beam" => CursorShape::Beam,
+        "underline" => CursorShape::Underline,
+        _ => CursorShape::Block,
+    }
+}
+
+/// A tab is either a shell session or the settings page; both render as the
+/// tab body and both can be focused/closed like any other tab.
+enum TabKind {
+    Terminal(Entity<TerminalView>),
+    Settings(Entity<SettingsView>),
+}
+
+impl TabKind {
+    fn title(&self, cx: &App) -> String {
+        match self {
+            TabKind::Terminal(view) => view.read(cx).title().to_string(),
+            TabKind::Settings(_) => "Settings".to_string(),
+        }
+    }
+
+    fn exited(&self, cx: &App) -> Option<i32> {
+        match self {
+            TabKind::Terminal(view) => view.read(cx).exited(),
+            TabKind::Settings(_) => None,
+        }
+    }
+
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        match self {
+            TabKind::Terminal(view) => view.read(cx).focus_handle(cx),
+            TabKind::Settings(view) => view.read(cx).focus_handle(cx),
+        }
+    }
+}
 
 pub struct Tab {
-    view: Entity<TerminalView>,
+    kind: TabKind,
 }
 
 pub struct Workspace {
@@ -39,8 +80,8 @@ impl Workspace {
         this
     }
 
-    /// Close tabs whose shells exited (every 500ms). Quits when the last
-    /// tab's shell exits.
+    /// Close terminal tabs whose shells exited (every 500ms). Quits once no
+    /// terminal tabs remain (a lone Settings tab doesn't keep the app open).
     fn spawn_reaper(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| loop {
             cx.background_executor()
@@ -49,10 +90,22 @@ impl Workspace {
             let done = this
                 .update(cx, |workspace, cx| {
                     let before = workspace.tabs.len();
-                    workspace
+                    let terminals_before = workspace
                         .tabs
-                        .retain(|tab| tab.view.read(cx).exited().is_none());
-                    if workspace.tabs.is_empty() && before > 0 {
+                        .iter()
+                        .filter(|tab| matches!(tab.kind, TabKind::Terminal(_)))
+                        .count();
+                    workspace.tabs.retain(|tab| tab.kind.exited(cx).is_none());
+                    let terminals_after = workspace
+                        .tabs
+                        .iter()
+                        .filter(|tab| matches!(tab.kind, TabKind::Terminal(_)))
+                        .count();
+                    // Quit only when the *last* terminal(s) just exited this
+                    // tick — not merely because none happen to remain (e.g.
+                    // the user already closed them all, leaving Settings
+                    // open, which should stay open).
+                    if terminals_before > 0 && terminals_after == 0 {
                         cx.quit();
                         return true;
                     }
@@ -72,14 +125,15 @@ impl Workspace {
     }
 
     pub fn add_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let cols = 80;
-        let rows = 24;
+        let cols = self.settings.default_cols;
+        let rows = self.settings.default_rows;
         let session = match Session::spawn(SpawnOptions {
             shell: terminal_core::default_shell(),
             args: vec!["-l".to_string()],
             cols,
             rows,
             scrollback: self.settings.scrollback_lines,
+            cursor_shape: cursor_shape_from_setting(&self.settings.cursor_shape),
         }) {
             Ok(session) => {
                 eprintln!("[coast] spawned {} ({cols}x{rows})", session.cols());
@@ -102,7 +156,30 @@ impl Workspace {
                 cx,
             )
         });
-        self.tabs.push(Tab { view });
+        self.tabs.push(Tab {
+            kind: TabKind::Terminal(view),
+        });
+        self.active = self.tabs.len() - 1;
+        cx.notify();
+        self.focus_active(window, cx);
+    }
+
+    /// Open the Settings tab, or just activate it if it's already open.
+    pub fn open_settings_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(ix) = self
+            .tabs
+            .iter()
+            .position(|tab| matches!(tab.kind, TabKind::Settings(_)))
+        {
+            self.activate(ix, window, cx);
+            return;
+        }
+        let workspace = cx.entity();
+        let settings = self.settings.clone();
+        let view = cx.new(|cx| SettingsView::new(workspace, settings, cx));
+        self.tabs.push(Tab {
+            kind: TabKind::Settings(view),
+        });
         self.active = self.tabs.len() - 1;
         cx.notify();
         self.focus_active(window, cx);
@@ -156,7 +233,7 @@ impl Workspace {
 
     pub fn focus_active(&self, window: &mut Window, cx: &mut App) {
         if let Some(tab) = self.tabs.get(self.active) {
-            let handle = tab.view.read(cx).focus_handle(cx);
+            let handle = tab.kind.focus_handle(cx);
             window.focus(&handle);
         }
     }
@@ -167,6 +244,38 @@ impl Workspace {
 
     pub fn active_index(&self) -> usize {
         self.clamped_active()
+    }
+
+    /// Apply new settings: persist to disk, and push font/theme/cursor-blink
+    /// changes live to every open terminal tab. `cursor_shape` and the
+    /// default window size only take effect for new tabs/windows, since
+    /// they're baked in at spawn time.
+    pub fn apply_settings(&mut self, settings: coast_settings::Settings, cx: &mut Context<Self>) {
+        if let Err(err) = settings.save() {
+            eprintln!("[coast] failed to save settings: {err:#}");
+        }
+        self.theme = settings.theme();
+        self.chrome = settings.chrome_theme();
+        self.settings = settings;
+
+        let font_family = SharedString::new(self.settings.font_family.clone());
+        let font_size = self.settings.font_size;
+        let theme = self.theme.clone();
+        let cursor_blink = self.settings.cursor_blink;
+        for tab in &self.tabs {
+            if let TabKind::Terminal(view) = &tab.kind {
+                view.update(cx, |view, cx| {
+                    view.update_settings(
+                        font_family.clone(),
+                        font_size,
+                        theme.clone(),
+                        cursor_blink,
+                        cx,
+                    )
+                });
+            }
+        }
+        cx.notify();
     }
 }
 
@@ -212,7 +321,7 @@ impl Render for Workspace {
             );
 
         for (ix, tab) in self.tabs.iter().enumerate() {
-            let title = SharedString::new(tab.view.read(cx).title());
+            let title = SharedString::new(tab.kind.title(cx));
             let is_active = ix == active;
             bar = bar.child(
                 div()
@@ -318,11 +427,43 @@ impl Render for Workspace {
                     .on_mouse_down(MouseButton::Left, |_, window: &mut Window, _| {
                         window.start_window_move()
                     }),
+            )
+            // Settings, pinned to the very right-hand end of the bar.
+            .child(
+                div()
+                    .h(px(TAB_HEIGHT))
+                    .flex()
+                    .items_center()
+                    .pr_2()
+                    .child(
+                        div()
+                            .id("open-settings")
+                            .h(px(28.))
+                            .w(px(28.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_md()
+                            .hover(|s| s.bg(chrome_hover))
+                            .child(
+                                svg()
+                                    .path("icons/gear.svg")
+                                    .size(px(16.))
+                                    .text_color(chrome_inactive_tab_text),
+                            )
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this: &mut Workspace, _, window, cx| {
+                                    this.open_settings_tab(window, cx)
+                                }),
+                            ),
+                    ),
             );
 
         let body = div().flex_1().w_full();
-        let body = match self.tabs.get(active) {
-            Some(tab) => body.child(tab.view.clone()),
+        let body = match self.tabs.get(active).map(|tab| &tab.kind) {
+            Some(TabKind::Terminal(view)) => body.child(view.clone()),
+            Some(TabKind::Settings(view)) => body.child(view.clone()),
             None => body,
         };
 
@@ -350,6 +491,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|_this, _: &crate::Zoom, window, _cx| window.zoom_window()))
             .on_action(cx.listener(|_this, _: &crate::ToggleFullScreen, window, _cx| {
                 window.toggle_fullscreen()
+            }))
+            .on_action(cx.listener(|this, _: &crate::OpenSettings, window, cx| {
+                this.open_settings_tab(window, cx)
             }))
             .child(bar)
             .child(body)

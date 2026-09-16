@@ -728,6 +728,7 @@ dependencies = [
  "anyhow",
  "coast-settings",
  "coast-themes",
+ "core-text",
  "gpui",
  "terminal-core",
 ]

@@ -7,6 +7,9 @@
 //! chrome_theme = "Dark Gray"
 //! scrollback_lines = 10000
 //! cursor_blink = true
+//! cursor_shape = "block" # "block" | "beam" | "underline"
+//! default_cols = 100
+//! default_rows = 30
 //! ```
 
 use std::path::PathBuf;
@@ -37,6 +40,18 @@ fn default_cursor_blink() -> bool {
     true
 }
 
+fn default_cursor_shape() -> String {
+    "block".to_string()
+}
+
+fn default_cols() -> u16 {
+    100
+}
+
+fn default_rows() -> u16 {
+    30
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_font_family")]
@@ -51,6 +66,14 @@ pub struct Settings {
     pub scrollback_lines: usize,
     #[serde(default = "default_cursor_blink")]
     pub cursor_blink: bool,
+    /// "block" | "beam" | "underline".
+    #[serde(default = "default_cursor_shape")]
+    pub cursor_shape: String,
+    /// Default window size for new windows, in character columns/rows.
+    #[serde(default = "default_cols")]
+    pub default_cols: u16,
+    #[serde(default = "default_rows")]
+    pub default_rows: u16,
 }
 
 impl Default for Settings {
@@ -62,6 +85,9 @@ impl Default for Settings {
             chrome_theme: default_chrome_theme(),
             scrollback_lines: default_scrollback_lines(),
             cursor_blink: default_cursor_blink(),
+            cursor_shape: default_cursor_shape(),
+            default_cols: default_cols(),
+            default_rows: default_rows(),
         }
     }
 }
@@ -80,6 +106,17 @@ impl Settings {
     /// Load from the standard location.
     pub fn load_default() -> anyhow::Result<Self> {
         Self::load(&config_path())
+    }
+
+    /// Write to the standard location, creating the containing directory if
+    /// needed.
+    pub fn save(&self) -> anyhow::Result<()> {
+        let path = config_path();
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(path, toml::to_string_pretty(self)?)?;
+        Ok(())
     }
 
     /// Resolve the configured theme (built-in or user TOML), falling back
@@ -157,6 +194,29 @@ mod tests {
         assert_eq!(s.chrome_theme, "Light");
         assert_eq!(s.scrollback_lines, 10_000);
         assert!(s.cursor_blink);
+        assert_eq!(s.cursor_shape, "block");
+        assert_eq!(s.default_cols, 100);
+        assert_eq!(s.default_rows, 30);
+    }
+
+    #[test]
+    fn save_and_reload_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("coast-settings-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // SAFETY: test-only env var override; this test does not run
+        // concurrently with anything else that reads HOME.
+        unsafe { std::env::set_var("HOME", &dir) };
+
+        let mut s = Settings::default();
+        s.cursor_shape = "beam".to_string();
+        s.default_cols = 120;
+        s.save().expect("save settings");
+
+        let reloaded = Settings::load_default().expect("reload settings");
+        assert_eq!(reloaded.cursor_shape, "beam");
+        assert_eq!(reloaded.default_cols, 120);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

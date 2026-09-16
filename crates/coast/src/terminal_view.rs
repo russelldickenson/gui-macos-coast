@@ -75,6 +75,24 @@ impl TerminalView {
         &self.title
     }
 
+    /// Apply new font/theme/cursor-blink settings live. Resets `font_key` so
+    /// the next `prepaint` remeasures the cell size and reflows the grid.
+    pub fn update_settings(
+        &mut self,
+        font_family: SharedString,
+        font_size: f32,
+        theme: coast_themes::Theme,
+        cursor_blink: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.font_family = font_family;
+        self.font_size = font_size;
+        self.theme = theme;
+        self.cursor_blink = cursor_blink;
+        self.font_key = (SharedString::default(), 0);
+        cx.notify();
+    }
+
     pub fn exited(&self) -> Option<i32> {
         self.exited
     }

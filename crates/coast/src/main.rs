@@ -5,8 +5,11 @@
 
 mod colors;
 mod keys;
+mod settings_view;
 mod terminal_view;
 mod workspace;
+
+use std::borrow::Cow;
 
 use gpui::{actions, prelude::*, *};
 
@@ -29,8 +32,28 @@ actions!(
         Minimize,
         Zoom,
         ToggleFullScreen,
+        OpenSettings,
     ]
 );
+
+/// Embeds `assets/` into the binary so `svg().path(...)` can resolve icons
+/// without shipping loose files next to the app bundle.
+struct Assets;
+
+impl AssetSource for Assets {
+    fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        match path {
+            "icons/gear.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../../../assets/icons/gear.svg"
+            )))),
+            _ => Ok(None),
+        }
+    }
+
+    fn list(&self, _path: &str) -> Result<Vec<SharedString>> {
+        Ok(vec![])
+    }
+}
 
 /// Native `Coast / Shell / Edit / View / Window` menu bar.
 fn app_menus() -> Vec<Menu> {
@@ -38,6 +61,8 @@ fn app_menus() -> Vec<Menu> {
         Menu {
             name: "Coast".into(),
             items: vec![
+                MenuItem::action("Settings…", OpenSettings),
+                MenuItem::separator(),
                 MenuItem::action("Hide Coast", Hide),
                 MenuItem::action("Hide Others", HideOthers),
                 MenuItem::action("Show All", ShowAll),
@@ -79,8 +104,9 @@ fn app_menus() -> Vec<Menu> {
 }
 
 fn main() {
-    Application::new().run(|cx: &mut App| {
+    Application::new().with_assets(Assets).run(|cx: &mut App| {
         cx.bind_keys([
+            KeyBinding::new("cmd-,", OpenSettings, None),
             KeyBinding::new("cmd-t", NewTab, None),
             KeyBinding::new("cmd-w", CloseTab, None),
             KeyBinding::new("ctrl-tab", NextTab, None),

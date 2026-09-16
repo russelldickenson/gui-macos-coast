@@ -10,7 +10,7 @@ use std::time::Duration;
 use alacritty_terminal::{
     event::{Event, EventListener},
     term::{test::TermSize, Config},
-    vte::ansi::Processor,
+    vte::ansi::{CursorShape, CursorStyle, Processor},
     Term,
 };
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -74,6 +74,9 @@ pub struct SpawnOptions {
     pub rows: u16,
     /// Scrollback history length in lines.
     pub scrollback: usize,
+    /// The cursor shape shown until an app requests a different one (e.g.
+    /// via DECSCUSR).
+    pub cursor_shape: CursorShape,
 }
 
 impl SpawnOptions {
@@ -85,6 +88,7 @@ impl SpawnOptions {
             cols,
             rows,
             scrollback: 10_000,
+            cursor_shape: CursorShape::Block,
         }
     }
 }
@@ -141,6 +145,10 @@ impl Session {
 
         let config = Config {
             scrolling_history: opts.scrollback,
+            default_cursor_style: CursorStyle {
+                shape: opts.cursor_shape,
+                blinking: false,
+            },
             ..Config::default()
         };
         let term = Arc::new(Mutex::new(Term::new(
@@ -323,6 +331,7 @@ mod tests {
             cols: 80,
             rows: 24,
             scrollback: 1000,
+            cursor_shape: CursorShape::Block,
         })
         .expect("spawn session");
 
@@ -341,6 +350,7 @@ mod tests {
             cols: 80,
             rows: 24,
             scrollback: 1000,
+            cursor_shape: CursorShape::Block,
         })
         .expect("spawn session");
 
