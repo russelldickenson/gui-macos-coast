@@ -62,6 +62,14 @@ pub struct Workspace {
     settings: coast_settings::Settings,
     theme: coast_themes::Theme,
     chrome: coast_themes::ChromeTheme,
+    /// The live "cols x rows" HUD shown while resizing, if currently visible.
+    resize_hud: Option<(u16, u16)>,
+    /// Bumped on every `show_resize_hud` call so a stale auto-hide timer
+    /// (scheduled by an earlier, since-superseded resize event) can tell
+    /// it's no longer the latest one and skip hiding the HUD early —
+    /// without this, rapid resize events during a drag cause the HUD to
+    /// flicker off and back on.
+    resize_hud_epoch: u64,
 }
 
 impl Workspace {
@@ -75,6 +83,8 @@ impl Workspace {
             settings,
             theme,
             chrome,
+            resize_hud: None,
+            resize_hud_epoch: 0,
         };
         this.spawn_reaper(cx);
         this
@@ -156,12 +166,42 @@ impl Workspace {
                 cx,
             )
         });
+        cx.subscribe(&view, |workspace, _view, event: &crate::terminal_view::ResizedEvent, cx| {
+            workspace.show_resize_hud(event.cols, event.rows, cx);
+        })
+        .detach();
         self.tabs.push(Tab {
             kind: TabKind::Terminal(view),
         });
         self.active = self.tabs.len() - 1;
         cx.notify();
         self.focus_active(window, cx);
+    }
+
+    /// Show the live "cols x rows" HUD, resetting its auto-hide timer. Only
+    /// the active tab's resize events reach here (inactive tabs aren't
+    /// rendered, so their `TerminalElement` never runs `prepaint`).
+    fn show_resize_hud(&mut self, cols: u16, rows: u16, cx: &mut Context<Self>) {
+        self.resize_hud = Some((cols, rows));
+        self.resize_hud_epoch = self.resize_hud_epoch.wrapping_add(1);
+        let epoch = self.resize_hud_epoch;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(900))
+                .await;
+            this.update(cx, |this, cx| {
+                // A newer resize event has already re-armed the timer;
+                // leave the HUD showing.
+                if this.resize_hud_epoch != epoch {
+                    return;
+                }
+                this.resize_hud = None;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Open the Settings tab, or just activate it if it's already open.
@@ -285,7 +325,7 @@ pub const BAR_HEIGHT: f32 = 44.;
 pub const TAB_HEIGHT: f32 = 36.;
 
 impl Render for Workspace {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bg = crate::colors::hsla(self.theme.background);
         let active = self.clamped_active();
 
@@ -497,5 +537,34 @@ impl Render for Workspace {
             }))
             .child(bar)
             .child(body)
+            .when_some(self.resize_hud, |root, (cols, rows)| {
+                const HUD_WIDTH: f32 = 140.;
+                const HUD_HEIGHT: f32 = 64.;
+                let viewport = window.viewport_size();
+                let origin = point(
+                    (viewport.width - px(HUD_WIDTH)) / 2.,
+                    (viewport.height - px(HUD_HEIGHT)) / 2.,
+                );
+                root.child(deferred(
+                    anchored().position(origin).child(
+                        div()
+                            .w(px(HUD_WIDTH))
+                            .h(px(HUD_HEIGHT))
+                            .rounded_xl()
+                            .bg(Hsla {
+                                h: 0.,
+                                s: 0.,
+                                l: 0.,
+                                a: 0.75,
+                            })
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(rgb(0xffffff))
+                            .text_lg()
+                            .child(format!("{cols} × {rows}")),
+                    ),
+                ))
+            })
     }
 }

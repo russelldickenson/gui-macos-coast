@@ -12,7 +12,7 @@ use alacritty_terminal::{
 };
 use gpui::{
     fill, point, prelude::*, px, relative, App, Bounds, Context, Element, ElementId, Entity,
-    FocusHandle, Focusable, Font, FontStyle, FontWeight, GlobalElementId, Hsla,
+    EventEmitter, FocusHandle, Focusable, Font, FontStyle, FontWeight, GlobalElementId, Hsla,
     InspectorElementId, IntoElement, KeyDownEvent, Keystroke, LayoutId, PaintQuad, Pixels, Point,
     ShapedLine, SharedString, Size, StrikethroughStyle, Style, TextRun, UnderlineStyle, Window,
 };
@@ -23,6 +23,16 @@ use terminal_core::{Session, SessionEvent};
 const BLINK_INTERVAL: Duration = Duration::from_millis(530);
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
 const MEASURE_SAMPLE: &str = "MMMMMMMM";
+
+/// Fired whenever the grid's column/row count changes (the window was
+/// resized), so `Workspace` can show a live size HUD.
+#[derive(Debug, Clone, Copy)]
+pub struct ResizedEvent {
+    pub cols: u16,
+    pub rows: u16,
+}
+
+impl EventEmitter<ResizedEvent> for TerminalView {}
 
 pub struct TerminalView {
     session: Arc<Session>,
@@ -38,6 +48,10 @@ pub struct TerminalView {
     title: SharedString,
     exited: Option<i32>,
     traced_output: bool,
+    /// Set after the tab's first resize (spawn-size -> actual window size,
+    /// which happens on every new tab, not just a real user resize) so the
+    /// resize HUD only fires for genuine window resizes.
+    has_resized_once: bool,
 }
 
 impl TerminalView {
@@ -66,6 +80,7 @@ impl TerminalView {
             title: SharedString::new_static("Coast"),
             exited: None,
             traced_output: false,
+            has_resized_once: false,
         };
         this.spawn_poll(cx);
         this
@@ -264,6 +279,7 @@ impl Element for TerminalElement {
         let cursor_visible = snapshot.cursor_visible;
         let focused = snapshot.focus_handle.is_focused(window);
         let session = snapshot.session.clone();
+        let already_resized_once = snapshot.has_resized_once;
 
         // Measure the cell when the font or size changed.
         if self.view.read(cx).font_key != font_key {
@@ -297,6 +313,12 @@ impl Element for TerminalElement {
         if cols != session.cols() || rows != session.rows() {
             eprintln!("[coast] resize {}x{} -> {cols}x{rows}", session.cols(), session.rows());
             let _ = session.resize(cols, rows);
+            self.view.update(cx, |view, cx| {
+                if already_resized_once {
+                    cx.emit(ResizedEvent { cols, rows });
+                }
+                view.has_resized_once = true;
+            });
         }
 
         // Copy visible rows out of the grid.
