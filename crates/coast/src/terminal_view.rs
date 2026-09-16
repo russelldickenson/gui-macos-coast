@@ -89,6 +89,12 @@ pub struct TerminalView {
     last_cwd_check: Instant,
     /// Whether the breadcrumb's subdirectory list is currently open.
     breadcrumb_open: bool,
+    /// The tab's content width as of the last paint, used to decide how
+    /// many breadcrumb segments fit before collapsing the middle ones into
+    /// an ellipsis. Lags real layout by one frame (it's captured during
+    /// `TerminalElement::prepaint`, which runs after `render`), which is
+    /// imperceptible in practice.
+    content_width: Pixels,
 }
 
 impl TerminalView {
@@ -126,6 +132,7 @@ impl TerminalView {
             current_dir: None,
             last_cwd_check: Instant::now() - CWD_POLL_INTERVAL,
             breadcrumb_open: false,
+            content_width: px(2000.),
         };
         this.spawn_poll(cx);
         this
@@ -331,10 +338,11 @@ impl Render for TerminalView {
             .size_full()
             .child(terminal_area)
             .when(self.show_breadcrumb, |root| {
+                let width = self.content_width;
                 root.children(
                     self.current_dir
                         .clone()
-                        .map(|dir| breadcrumb(&dir, self.breadcrumb_open, cx)),
+                        .map(|dir| breadcrumb(&dir, self.breadcrumb_open, width, cx)),
                 )
             })
     }
@@ -414,6 +422,78 @@ struct Crumb {
     is_home: bool,
 }
 
+/// One rendered slot in the breadcrumb: a real segment, or the collapsed
+/// stand-in for however many segments got dropped in the middle.
+enum BreadcrumbItem<'a> {
+    Crumb(&'a Crumb),
+    Ellipsis,
+}
+
+/// Rough per-segment width estimates (no real text measurement — this only
+/// decides how many segments to *attempt*, gpui lays the chosen ones out
+/// exactly regardless) for a ~12px proportional UI font.
+const BREADCRUMB_CHAR_WIDTH: f32 = 7.2;
+const BREADCRUMB_PILL_OVERHEAD: f32 = 24.;
+const BREADCRUMB_ICON_WIDTH: f32 = 18.;
+const BREADCRUMB_CHEVRON_WIDTH: f32 = 32.;
+
+fn estimate_crumb_width(crumb: &Crumb) -> f32 {
+    crumb.label.chars().count() as f32 * BREADCRUMB_CHAR_WIDTH
+        + BREADCRUMB_PILL_OVERHEAD
+        + if crumb.is_home {
+            BREADCRUMB_ICON_WIDTH
+        } else {
+            0.
+        }
+}
+
+/// Pick which segments to show given the space available: everything, if
+/// it fits; otherwise the first and last segments always stay, and as many
+/// of the segments right before the last as fit are kept too (they're the
+/// ones nearest to — and so most useful for navigating around — the
+/// current directory), with the dropped middle collapsed into one ellipsis.
+fn collapse_breadcrumb(segments: &[Crumb], available_width: Pixels) -> Vec<BreadcrumbItem<'_>> {
+    let n = segments.len();
+    if n <= 2 {
+        return segments.iter().map(BreadcrumbItem::Crumb).collect();
+    }
+
+    let available = f32::from(available_width);
+    let full_width: f32 = segments.iter().map(estimate_crumb_width).sum::<f32>()
+        + BREADCRUMB_CHEVRON_WIDTH * (n - 1) as f32;
+    if full_width <= available {
+        return segments.iter().map(BreadcrumbItem::Crumb).collect();
+    }
+
+    let first = &segments[0];
+    let last = &segments[n - 1];
+    let ellipsis_width = BREADCRUMB_PILL_OVERHEAD + BREADCRUMB_CHAR_WIDTH;
+    let mut budget = available
+        - estimate_crumb_width(first)
+        - estimate_crumb_width(last)
+        - BREADCRUMB_CHEVRON_WIDTH * 2.
+        - ellipsis_width;
+
+    let mut tail: Vec<&Crumb> = Vec::new();
+    for crumb in segments[1..n - 1].iter().rev() {
+        let width = estimate_crumb_width(crumb) + BREADCRUMB_CHEVRON_WIDTH;
+        if width > budget {
+            break;
+        }
+        budget -= width;
+        tail.push(crumb);
+    }
+    tail.reverse();
+
+    let mut items = vec![BreadcrumbItem::Crumb(first)];
+    if tail.len() < n - 2 {
+        items.push(BreadcrumbItem::Ellipsis);
+    }
+    items.extend(tail.into_iter().map(BreadcrumbItem::Crumb));
+    items.push(BreadcrumbItem::Crumb(last));
+    items
+}
+
 /// Break `path` into breadcrumb segments. When it's under `$HOME`, the
 /// first segment is a "Home" pill (matching the reference screenshot);
 /// otherwise segments run from the filesystem root.
@@ -479,10 +559,14 @@ fn subdirectories(path: &std::path::Path) -> Vec<String> {
 fn breadcrumb(
     path: &std::path::Path,
     open: bool,
+    content_width: Pixels,
     cx: &mut Context<TerminalView>,
 ) -> impl IntoElement {
     let segments = breadcrumb_segments(path);
-    let last_ix = segments.len().saturating_sub(1);
+    // Leave room for the bar's own horizontal padding either side.
+    let available_width = (content_width - px(16.)).max(px(0.));
+    let items = collapse_breadcrumb(&segments, available_width);
+    let last_ix = items.len().saturating_sub(1);
 
     let mut bar = gpui::div()
         .flex_none()
@@ -495,8 +579,29 @@ fn breadcrumb(
         .gap_2()
         .bg(rgb(BREADCRUMB_PILL));
 
-    for (ix, crumb) in segments.iter().enumerate() {
+    for (ix, item) in items.iter().enumerate() {
         let is_last = ix == last_ix;
+        let crumb = match item {
+            BreadcrumbItem::Ellipsis => {
+                bar = bar.child(
+                    gpui::div()
+                        .px(px(4.))
+                        .text_size(px(12.))
+                        .text_color(rgb(BREADCRUMB_CHEVRON))
+                        .child("…"),
+                );
+                if !is_last {
+                    bar = bar.child(
+                        gpui::div()
+                            .text_size(px(16.))
+                            .text_color(rgb(BREADCRUMB_CHEVRON))
+                            .child("›"),
+                    );
+                }
+                continue;
+            }
+            BreadcrumbItem::Crumb(crumb) => *crumb,
+        };
         let target = crumb.path.clone();
 
         // Every pill shares the same fill/border/text so the row reads as
@@ -703,6 +808,11 @@ impl Element for TerminalElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
+        if self.view.read(cx).content_width != bounds.size.width {
+            self.view.update(cx, |view, _| {
+                view.content_width = bounds.size.width;
+            });
+        }
         let snapshot = self.view.read(cx);
         let font_size = px(snapshot.font_size);
         let theme = snapshot.theme.clone();
@@ -1091,5 +1201,62 @@ fn indexed_color(i: u8) -> coast_themes::Color {
     } else {
         let v = 8 + 10 * (i - 232);
         coast_themes::Color::new(v, v, v)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn crumbs(labels: &[&str]) -> Vec<Crumb> {
+        labels
+            .iter()
+            .enumerate()
+            .map(|(ix, label)| Crumb {
+                label: label.to_string(),
+                path: std::path::PathBuf::from(format!("/{ix}")),
+                is_home: ix == 0 && *label == "Home",
+            })
+            .collect()
+    }
+
+    fn labels_of<'a>(items: &'a [BreadcrumbItem<'a>]) -> Vec<&'a str> {
+        items
+            .iter()
+            .map(|item| match item {
+                BreadcrumbItem::Crumb(c) => c.label.as_str(),
+                BreadcrumbItem::Ellipsis => "…",
+            })
+            .collect()
+    }
+
+    #[test]
+    fn keeps_everything_when_it_fits() {
+        let segs = crumbs(&["Home", "personal", "repos", "coast"]);
+        let items = collapse_breadcrumb(&segs, px(2000.));
+        assert_eq!(labels_of(&items), vec!["Home", "personal", "repos", "coast"]);
+    }
+
+    #[test]
+    fn collapses_middle_when_too_narrow() {
+        let segs = crumbs(&[
+            "Home", "a", "b", "c", "d", "e", "f", "g", "current-directory",
+        ]);
+        let items = collapse_breadcrumb(&segs, px(220.));
+        let labels = labels_of(&items);
+        assert_eq!(labels.first(), Some(&"Home"));
+        assert_eq!(labels.last(), Some(&"current-directory"));
+        assert!(labels.contains(&"…"), "expected an ellipsis, got {labels:?}");
+        assert!(
+            labels.len() < segs.len(),
+            "expected fewer items than the full path, got {labels:?}"
+        );
+    }
+
+    #[test]
+    fn two_segments_never_collapse() {
+        let segs = crumbs(&["/", "only-child-directory-with-a-very-long-name"]);
+        let items = collapse_breadcrumb(&segs, px(1.));
+        assert_eq!(labels_of(&items).len(), 2);
     }
 }
