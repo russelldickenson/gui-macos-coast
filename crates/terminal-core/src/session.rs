@@ -255,6 +255,32 @@ impl Session {
         Ok(())
     }
 
+    /// Whether something other than the idle shell prompt currently owns
+    /// the terminal's foreground process group — e.g. a build, an editor,
+    /// an ssh session. Used to decide whether closing the tab needs
+    /// confirmation. Compares the PTY's foreground process group (as the
+    /// kernel reports it) against the shell's own pid; if they differ, a
+    /// child process is running in the foreground.
+    pub fn has_foreground_process(&self) -> bool {
+        let shell_pid = match self
+            .child
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().and_then(|child| child.process_id()))
+        {
+            Some(pid) => pid as libc::pid_t,
+            None => return false,
+        };
+
+        let fd = match self.master.lock().ok().and_then(|m| m.as_raw_fd()) {
+            Some(fd) => fd,
+            None => return false,
+        };
+
+        let fg_pgid = unsafe { libc::tcgetpgrp(fd) };
+        fg_pgid > 0 && fg_pgid != shell_pid
+    }
+
     /// Run a closure against the emulation state (UI render path).
     pub fn with_term<R>(&self, f: impl FnOnce(&Term<SessionEventProxy>) -> R) -> R {
         let term = self.term.lock().expect("terminal state poisoned");

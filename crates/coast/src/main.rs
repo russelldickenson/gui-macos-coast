@@ -128,10 +128,26 @@ fn main() {
         cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
         cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
 
+        // Size the window to fit the configured default columns/rows, rather
+        // than letting the platform pick an arbitrary default size — the PTY
+        // still starts at these dimensions too, but without this the window
+        // itself would come up much bigger (or smaller) than what those
+        // numbers actually look like.
+        let settings = coast_settings::Settings::load_default().unwrap_or_default();
+        let cell = terminal_view::measure_cell_size(
+            cx,
+            SharedString::new(settings.font_family.clone()),
+            settings.font_size,
+        );
+        let window_size = Size {
+            width: cell.width * settings.default_cols as f32,
+            height: cell.height * settings.default_rows as f32 + px(workspace::BAR_HEIGHT),
+        };
+
         let handle = cx
             .open_window(
                 WindowOptions {
-                    window_bounds: None,
+                    window_bounds: Some(WindowBounds::centered(window_size, cx)),
                     titlebar: Some(TitlebarOptions {
                         title: Some(SharedString::new_static("Coast")),
                         appears_transparent: true,

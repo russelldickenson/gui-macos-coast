@@ -56,6 +56,12 @@ pub struct Tab {
     kind: TabKind,
 }
 
+/// A tab-close awaiting user confirmation, plus why we're asking.
+struct PendingClose {
+    ix: usize,
+    message: SharedString,
+}
+
 pub struct Workspace {
     tabs: Vec<Tab>,
     active: usize,
@@ -70,6 +76,11 @@ pub struct Workspace {
     /// without this, rapid resize events during a drag cause the HUD to
     /// flicker off and back on.
     resize_hud_epoch: u64,
+    /// A tab-close confirmation dialog, if one is currently showing.
+    pending_close: Option<PendingClose>,
+    /// Focus target while `pending_close` is showing, so Enter/Escape reach
+    /// the dialog instead of falling through to the terminal underneath.
+    close_confirm_focus: FocusHandle,
 }
 
 impl Workspace {
@@ -85,6 +96,8 @@ impl Workspace {
             chrome,
             resize_hud: None,
             resize_hud_epoch: 0,
+            pending_close: None,
+            close_confirm_focus: cx.focus_handle(),
         };
         this.spawn_reaper(cx);
         this
@@ -225,7 +238,40 @@ impl Workspace {
         self.focus_active(window, cx);
     }
 
+    /// Close a tab, asking for confirmation first when doing so would lose
+    /// something: it's the last tab open (closing it quits Coast), or its
+    /// shell has a foreground process running rather than sitting at an
+    /// idle prompt.
     pub fn close_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if ix >= self.tabs.len() {
+            return;
+        }
+        if !self.settings.confirm_close_tab {
+            self.close_tab_now(ix, window, cx);
+            return;
+        }
+        let message: Option<SharedString> = if self.tabs.len() == 1 {
+            Some("This is the last tab — closing it will quit Coast.".into())
+        } else if let TabKind::Terminal(view) = &self.tabs[ix].kind {
+            if view.read(cx).session().has_foreground_process() {
+                Some("A process is still running in this tab.".into())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        match message {
+            Some(message) => {
+                self.pending_close = Some(PendingClose { ix, message });
+                window.focus(&self.close_confirm_focus);
+                cx.notify();
+            }
+            None => self.close_tab_now(ix, window, cx),
+        }
+    }
+
+    fn close_tab_now(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         if ix >= self.tabs.len() {
             return;
         }
@@ -237,6 +283,19 @@ impl Workspace {
         self.active = self.active.min(self.tabs.len() - 1);
         cx.notify();
         self.focus_active(window, cx);
+    }
+
+    fn confirm_pending_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(pending) = self.pending_close.take() {
+            self.close_tab_now(pending.ix, window, cx);
+        }
+    }
+
+    fn cancel_pending_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_close.take().is_some() {
+            self.focus_active(window, cx);
+            cx.notify();
+        }
     }
 
     pub fn activate(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -566,5 +625,90 @@ impl Render for Workspace {
                     ),
                 ))
             })
+            .when_some(
+                self.pending_close.as_ref().map(|p| p.message.clone()),
+                |root, message| {
+                    const DIALOG_WIDTH: f32 = 340.;
+                    let viewport = window.viewport_size();
+                    let origin = point((viewport.width - px(DIALOG_WIDTH)) / 2., px(96.));
+                    root.child(deferred(
+                        anchored().position(origin).child(
+                            div()
+                                .id("close-tab-confirm")
+                                .track_focus(&self.close_confirm_focus)
+                                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                                    match event.keystroke.key.as_str() {
+                                        "enter" => this.confirm_pending_close(window, cx),
+                                        "escape" => this.cancel_pending_close(window, cx),
+                                        _ => {}
+                                    }
+                                }))
+                                .w(px(DIALOG_WIDTH))
+                                .rounded_xl()
+                                .bg(rgb(0x2b2b2e))
+                                .border_1()
+                                .border_color(rgb(0x454548))
+                                .shadow_lg()
+                                .p_4()
+                                .flex()
+                                .flex_col()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_color(rgb(0xffffff))
+                                        .text_sm()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child("Close this tab?"),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(rgb(0xbdbdc0))
+                                        .text_xs()
+                                        .child(message),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .justify_end()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .px_3()
+                                                .py_1()
+                                                .rounded_md()
+                                                .text_sm()
+                                                .text_color(rgb(0xffffff))
+                                                .hover(|s| s.bg(rgb(0x3d3d40)))
+                                                .child("Cancel")
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(|this, _, window, cx| {
+                                                        this.cancel_pending_close(window, cx)
+                                                    }),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .px_3()
+                                                .py_1()
+                                                .rounded_md()
+                                                .bg(rgb(0xd64545))
+                                                .text_sm()
+                                                .text_color(rgb(0xffffff))
+                                                .hover(|s| s.bg(rgb(0xe25a5a)))
+                                                .child("Close Tab")
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(|this, _, window, cx| {
+                                                        this.confirm_pending_close(window, cx)
+                                                    }),
+                                                ),
+                                        ),
+                                ),
+                        ),
+                    ))
+                },
+            )
     }
 }

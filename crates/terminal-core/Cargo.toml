@@ -8,3 +8,4 @@ license.workspace = true
 alacritty_terminal = "0.26"
 portable-pty = "0.9"
 anyhow.workspace = true
+libc = "0.2"

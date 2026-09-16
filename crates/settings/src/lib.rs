@@ -10,6 +10,7 @@
 //! cursor_shape = "block" # "block" | "beam" | "underline"
 //! default_cols = 100
 //! default_rows = 30
+//! confirm_close_tab = true
 //! ```
 
 use std::path::PathBuf;
@@ -52,6 +53,10 @@ fn default_rows() -> u16 {
     30
 }
 
+fn default_confirm_close_tab() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_font_family")]
@@ -74,6 +79,10 @@ pub struct Settings {
     pub default_cols: u16,
     #[serde(default = "default_rows")]
     pub default_rows: u16,
+    /// Ask for confirmation before closing a tab that's either the last
+    /// one open (which quits the app) or has a foreground process running.
+    #[serde(default = "default_confirm_close_tab")]
+    pub confirm_close_tab: bool,
 }
 
 impl Default for Settings {
@@ -88,6 +97,7 @@ impl Default for Settings {
             cursor_shape: default_cursor_shape(),
             default_cols: default_cols(),
             default_rows: default_rows(),
+            confirm_close_tab: default_confirm_close_tab(),
         }
     }
 }
@@ -197,6 +207,7 @@ mod tests {
         assert_eq!(s.cursor_shape, "block");
         assert_eq!(s.default_cols, 100);
         assert_eq!(s.default_rows, 30);
+        assert!(s.confirm_close_tab);
     }
 
     #[test]

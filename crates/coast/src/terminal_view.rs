@@ -24,6 +24,25 @@ const BLINK_INTERVAL: Duration = Duration::from_millis(530);
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
 const MEASURE_SAMPLE: &str = "MMMMMMMM";
 
+/// Measure a monospace cell's pixel size for `font_family`/`font_size`.
+/// Used before any terminal tab exists (e.g. sizing the initial window), so
+/// it works off the app's text system directly rather than a `TerminalView`
+/// (which measures via a window's text system during `prepaint`, where a
+/// full line-shaping pass is easy to come by but a window isn't yet).
+pub fn measure_cell_size(cx: &App, font_family: SharedString, font_size: f32) -> Size<Pixels> {
+    let text_system = cx.text_system();
+    let font_size = px(font_size);
+    let font_id = text_system.resolve_font(&gpui::font(font_family));
+    let width = text_system
+        .em_advance(font_id, font_size)
+        .unwrap_or(font_size);
+    // `FontMetrics::descent` returns a negative value (below the baseline);
+    // negate it to get the positive distance, matching how the platform
+    // text system computes line height (see its `-font_metrics.descent`).
+    let height = text_system.ascent(font_id, font_size) - text_system.descent(font_id, font_size);
+    Size { width, height }
+}
+
 /// Fired whenever the grid's column/row count changes (the window was
 /// resized), so `Workspace` can show a live size HUD.
 #[derive(Debug, Clone, Copy)]
@@ -88,6 +107,10 @@ impl TerminalView {
 
     pub fn title(&self) -> &str {
         &self.title
+    }
+
+    pub fn session(&self) -> &Session {
+        &self.session
     }
 
     /// Apply new font/theme/cursor-blink settings live. Resets `font_key` so

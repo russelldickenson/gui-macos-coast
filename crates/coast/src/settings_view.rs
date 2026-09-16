@@ -115,6 +115,7 @@ pub struct SettingsView {
     cursor_blink_focus: FocusHandle,
     font_family_focus: FocusHandle,
     font_size_focus: FocusHandle,
+    confirm_close_focus: FocusHandle,
     cols_field: TextField,
     cols_text: String,
     rows_field: TextField,
@@ -152,6 +153,7 @@ impl SettingsView {
             cursor_blink_focus: cx.focus_handle(),
             font_family_focus: cx.focus_handle(),
             font_size_focus: cx.focus_handle(),
+            confirm_close_focus: cx.focus_handle(),
             cols_field: TextField::new(cx),
             rows_field: TextField::new(cx),
             scrollback_field: TextField::new(cx),
@@ -389,7 +391,7 @@ impl Render for SettingsView {
                     if handle_tab_navigation(
                         &ev.keystroke,
                         window,
-                        &this.theme_focus,
+                        &this.confirm_close_focus,
                         &this.rows_field.focus,
                     ) {
                         return;
@@ -405,6 +407,26 @@ impl Render for SettingsView {
                         cx.notify();
                     }
                 }),
+            )
+            .into_any_element(),
+        )]);
+
+        let behavior_card = card(vec![setting_row(
+            "Confirm before closing",
+            Some("Ask before closing the last tab, or a tab with a running process."),
+            toggle_switch(
+                self.settings.confirm_close_tab,
+                Nav {
+                    focus: &self.confirm_close_focus,
+                    is_focused: focused_field(&self.confirm_close_focus),
+                    next: &self.theme_focus,
+                    prev: &self.scrollback_field.focus,
+                },
+                |this, _window, cx| {
+                    this.settings.confirm_close_tab = !this.settings.confirm_close_tab;
+                    this.commit(cx);
+                },
+                cx,
             )
             .into_any_element(),
         )]);
@@ -469,7 +491,14 @@ impl Render for SettingsView {
                     .child(section("Font", font_card))
                     .child(section("Window", window_card)),
             )
-            .child(section("Scrollback", scrollback_card))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_6()
+                    .child(section("Scrollback", scrollback_card))
+                    .child(section("Behavior", behavior_card)),
+            )
     }
 }
 
@@ -932,7 +961,7 @@ fn theme_dropdown(
             focus: &view.theme_focus,
             is_focused,
             next: &view.chrome_focus,
-            prev: &view.scrollback_field.focus,
+            prev: &view.confirm_close_focus,
         },
         cx,
     )
