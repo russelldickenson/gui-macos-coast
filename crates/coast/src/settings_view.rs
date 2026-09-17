@@ -67,7 +67,6 @@ enum FocusSlot {
     Theme,
     Import,
     Chrome,
-    TerminalFrame,
     CursorShape,
     CursorBlink,
     CursorColor,
@@ -81,11 +80,10 @@ enum FocusSlot {
 }
 
 impl FocusSlot {
-    const ORDER: [FocusSlot; 14] = [
+    const ORDER: [FocusSlot; 13] = [
         FocusSlot::Theme,
         FocusSlot::Import,
         FocusSlot::Chrome,
-        FocusSlot::TerminalFrame,
         FocusSlot::CursorShape,
         FocusSlot::CursorBlink,
         FocusSlot::CursorColor,
@@ -123,7 +121,6 @@ impl FocusSlot {
             FocusSlot::Theme => &view.theme_focus,
             FocusSlot::Import => &view.import_focus,
             FocusSlot::Chrome => &view.chrome_focus,
-            FocusSlot::TerminalFrame => &view.terminal_frame_focus,
             FocusSlot::CursorShape => &view.cursor_shape_focus,
             FocusSlot::CursorBlink => &view.cursor_blink_focus,
             FocusSlot::CursorColor => &view.cursor_color_field.focus,
@@ -210,7 +207,6 @@ pub struct SettingsView {
 
     theme_focus: FocusHandle,
     chrome_focus: FocusHandle,
-    terminal_frame_focus: FocusHandle,
     cursor_shape_focus: FocusHandle,
     cursor_blink_focus: FocusHandle,
     font_family_focus: FocusHandle,
@@ -262,7 +258,6 @@ impl SettingsView {
             available_fonts,
             theme_focus: cx.focus_handle(),
             chrome_focus: cx.focus_handle(),
-            terminal_frame_focus: cx.focus_handle(),
             cursor_shape_focus: cx.focus_handle(),
             cursor_blink_focus: cx.focus_handle(),
             font_family_focus: cx.focus_handle(),
@@ -500,20 +495,6 @@ impl Render for SettingsView {
                     },
                     FocusSlot::Chrome.nav(self, window),
                     RadioLayout::Horizontal,
-                    cx,
-                )
-                .into_any_element(),
-            ),
-            setting_row(
-                "Framed terminal",
-                Some("Surround each tab's terminal with rounded, titlebar-colored padding."),
-                toggle_switch(
-                    self.settings.terminal_frame,
-                    FocusSlot::TerminalFrame.nav(self, window),
-                    |this, _window, cx| {
-                        this.settings.terminal_frame = !this.settings.terminal_frame;
-                        this.commit(cx);
-                    },
                     cx,
                 )
                 .into_any_element(),

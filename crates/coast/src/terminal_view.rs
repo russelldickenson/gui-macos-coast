@@ -11,11 +11,11 @@ use alacritty_terminal::{
     vte::ansi::{Color as TermColor, CursorShape, NamedColor, Rgb},
 };
 use gpui::{
-    anchored, deferred, fill, point, prelude::*, px, relative, rgb, svg, App, BorderStyle, Bounds,
-    Context, Corners, Edges, Element, ElementId, Entity, EventEmitter, FocusHandle, Focusable,
-    Font, FontStyle, FontWeight, GlobalElementId, Hsla, InspectorElementId, IntoElement,
-    KeyDownEvent, Keystroke, LayoutId, MouseButton, PaintQuad, Pixels, Point, ScrollWheelEvent,
-    ShapedLine, SharedString, Size, StrikethroughStyle, Style, TextRun, UnderlineStyle, Window,
+    anchored, deferred, fill, point, prelude::*, px, relative, rgb, svg, App, Bounds, Context,
+    Element, ElementId, Entity, EventEmitter, FocusHandle, Focusable, Font, FontStyle, FontWeight,
+    GlobalElementId, Hsla, InspectorElementId, IntoElement, KeyDownEvent, Keystroke, LayoutId,
+    MouseButton, PaintQuad, Pixels, Point, ScrollWheelEvent, ShapedLine, SharedString, Size,
+    StrikethroughStyle, Style, TextRun, UnderlineStyle, Window,
 };
 
 use crate::colors;
@@ -83,12 +83,6 @@ pub struct TerminalView {
     scrollbar_hovered: bool,
     /// Whether the directory breadcrumb bar is shown above the grid.
     show_breadcrumb: bool,
-    /// Whether `Workspace` is wrapping this tab in its optional rounded,
-    /// titlebar-colored frame — if so, the terminal's own background needs
-    /// to paint with matching rounded corners itself, since gpui's
-    /// overflow-clipping is rectangle-only and won't round a child's
-    /// custom-painted content for us.
-    framed: bool,
     /// The foreground process's (or the shell's, if idle) current working
     /// directory, refreshed periodically while `show_breadcrumb` is on.
     current_dir: Option<std::path::PathBuf>,
@@ -122,7 +116,6 @@ impl TerminalView {
         theme: coast_themes::Theme,
         cursor_blink: bool,
         show_breadcrumb: bool,
-        framed: bool,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut this = Self {
@@ -147,7 +140,6 @@ impl TerminalView {
             scrollbar_epoch: 0,
             scrollbar_hovered: false,
             show_breadcrumb,
-            framed,
             current_dir: None,
             last_cwd_check: Instant::now() - CWD_POLL_INTERVAL,
             breadcrumb_open: false,
@@ -176,14 +168,12 @@ impl TerminalView {
         theme: coast_themes::Theme,
         cursor_blink: bool,
         show_breadcrumb: bool,
-        framed: bool,
         cx: &mut Context<Self>,
     ) {
         self.font_family = font_family;
         self.font_size = font_size;
         self.theme = theme;
         self.cursor_blink = cursor_blink;
-        self.framed = framed;
         self.font_key = (SharedString::default(), 0);
         if self.show_breadcrumb != show_breadcrumb {
             self.show_breadcrumb = show_breadcrumb;
@@ -393,27 +383,7 @@ impl Render for TerminalView {
                     view.flash_scrollbar(cx);
                 }
             }))
-            .child(TerminalElement {
-                view: cx.entity(),
-                corners: if self.framed {
-                    Corners {
-                        top_left: px(FRAME_RADIUS),
-                        top_right: px(FRAME_RADIUS),
-                        bottom_left: if self.show_breadcrumb {
-                            px(0.)
-                        } else {
-                            px(FRAME_RADIUS)
-                        },
-                        bottom_right: if self.show_breadcrumb {
-                            px(0.)
-                        } else {
-                            px(FRAME_RADIUS)
-                        },
-                    }
-                } else {
-                    Corners::default()
-                },
-            });
+            .child(TerminalElement { view: cx.entity() });
 
         let show_scrollbar = self.scrollbar_visible || self.scrollbar_hovered;
 
@@ -435,7 +405,6 @@ impl Render for TerminalView {
                     &dir,
                     self.breadcrumb_open,
                     self.content_width,
-                    self.framed,
                     &subdirs,
                     cx,
                 )
@@ -512,10 +481,6 @@ fn scrollbar(session: &Session, visible: bool, cx: &mut Context<TerminalView>) -
         .child(spacer(below))
 }
 
-/// Matches `Workspace`'s `rounded_lg()` on the outer frame wrapper, so the
-/// terminal's own painted corners (and the breadcrumb bar's) line up with
-/// the frame exactly instead of poking past it or leaving a gap.
-const FRAME_RADIUS: f32 = 8.;
 const BREADCRUMB_BAR_HEIGHT: f32 = 40.;
 const BREADCRUMB_PILL: u32 = 0x2c2d3a;
 const BREADCRUMB_PILL_BORDER: u32 = 0x40424f;
@@ -669,7 +634,6 @@ fn breadcrumb(
     path: &std::path::Path,
     open: bool,
     content_width: Pixels,
-    framed: bool,
     subdirs: &[String],
     cx: &mut Context<TerminalView>,
 ) -> impl IntoElement {
@@ -688,7 +652,6 @@ fn breadcrumb(
         .flex_row()
         .items_center()
         .gap_2()
-        .when(framed, |d| d.rounded_b(px(FRAME_RADIUS)))
         .bg(rgb(BREADCRUMB_PILL));
 
     for (ix, item) in items.iter().enumerate() {
@@ -868,12 +831,6 @@ struct CellSnapshot {
 
 struct TerminalElement {
     view: Entity<TerminalView>,
-    /// Non-zero only when `Workspace`'s optional frame is on: gpui's
-    /// overflow-clipping is rectangle-only, so a plain `rounded_lg()` +
-    /// `overflow_hidden()` wrapper won't round off this custom Element's
-    /// own painted background for us — it has to paint the rounding
-    /// itself.
-    corners: Corners<Pixels>,
 }
 
 struct TerminalPrepaint {
@@ -1117,14 +1074,7 @@ impl Element for TerminalElement {
         cx: &mut App,
     ) {
         let _ = cx;
-        window.paint_quad(PaintQuad {
-            bounds,
-            corner_radii: self.corners,
-            background: prepaint.background.into(),
-            border_widths: Edges::default(),
-            border_color: Hsla::transparent_black(),
-            border_style: BorderStyle::default(),
-        });
+        window.paint_quad(fill(bounds, prepaint.background));
         for (origin, line) in &prepaint.rows {
             let _ = line.paint(*origin, prepaint.cell.height, window, cx);
         }
