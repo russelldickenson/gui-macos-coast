@@ -432,8 +432,8 @@ impl Workspace {
 
 /// Tab strip height; `main.rs` centers the traffic lights against `TAB_HEIGHT`
 /// (the tabs sit flush against the bottom of this bar).
-pub const BAR_HEIGHT: f32 = 44.;
-pub const TAB_HEIGHT: f32 = 36.;
+pub const BAR_HEIGHT: f32 = 38.;
+pub const TAB_HEIGHT: f32 = 32.;
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -499,7 +499,7 @@ impl Render for Workspace {
                     } else {
                         chrome_inactive_tab_text
                     })
-                    .text_sm()
+                    .text_size(px(12.))
                     .child(div().flex_1().truncate().child(title))
                     .child(
                         div()
