@@ -70,10 +70,10 @@ pub fn light() -> ChromeTheme {
 pub fn dark_gray() -> ChromeTheme {
     ChromeTheme {
         name: "Dark Gray".to_string(),
-        bar: c!("#5e5e5e"),
-        active_tab: c!("#ffffff"),
-        active_tab_text: c!("#1c1c1e"),
-        inactive_tab: c!("#5e5e5e"),
+        bar: c!("#545454"),
+        active_tab: c!("#6e6e6e"),
+        active_tab_text: c!("#ffffff"),
+        inactive_tab: c!("#545454"),
         inactive_tab_text: c!("#d7d7d7"),
         hover: c!("#787878"),
         separator: c!("#4a4a4a"),

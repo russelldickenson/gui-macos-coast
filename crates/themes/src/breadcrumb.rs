@@ -63,7 +63,7 @@ pub fn light() -> BreadcrumbTheme {
 pub fn dark() -> BreadcrumbTheme {
     BreadcrumbTheme {
         name: "Dark".to_string(),
-        pill: c!("#2c2d3a"),
+        pill: c!("#545454"),
         pill_border: c!("#40424f"),
         pill_hover: c!("#363848"),
         text: c!("#d7d8e2"),
