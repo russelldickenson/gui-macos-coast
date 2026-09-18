@@ -496,8 +496,16 @@ impl Render for Workspace {
                     } else {
                         chrome_inactive_tab
                     })
-                    .when(is_active, |tab| {
-                        tab.border_t_1().border_x_1().border_color(chrome_separator)
+                    // Always reserve the border's space (even when
+                    // transparent) so switching which tab is active never
+                    // changes a tab's total width — a conditional border
+                    // alone shifts every tab after it.
+                    .border_t_1()
+                    .border_x_1()
+                    .border_color(if is_active {
+                        chrome_separator
+                    } else {
+                        Hsla::transparent_black()
                     })
                     .text_color(if is_active {
                         chrome_active_tab_text
