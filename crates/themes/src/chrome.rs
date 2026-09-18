@@ -75,7 +75,7 @@ pub fn dark_gray() -> ChromeTheme {
         active_tab_text: c!("#ffffff"),
         inactive_tab: c!("#2e3440"),
         inactive_tab_text: c!("#d7d7d7"),
-        hover: c!("#787878"),
+        hover: c!("#4c566a"),
         separator: c!("#4a4a4a"),
     }
 }
