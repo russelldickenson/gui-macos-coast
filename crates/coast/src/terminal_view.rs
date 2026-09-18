@@ -488,7 +488,7 @@ fn scrollbar(session: &Session, visible: bool, cx: &mut Context<TerminalView>) -
         .child(spacer(below))
 }
 
-const BREADCRUMB_BAR_HEIGHT: f32 = 40.;
+const BREADCRUMB_BAR_HEIGHT: f32 = 32.;
 
 /// One clickable pill in the breadcrumb: a display label plus the full path
 /// clicking it navigates to (an ancestor for every segment but the last).
@@ -509,7 +509,7 @@ enum BreadcrumbItem<'a> {
 /// decides how many segments to *attempt*, gpui lays the chosen ones out
 /// exactly regardless) for a ~12px proportional UI font.
 const BREADCRUMB_CHAR_WIDTH: f32 = 7.2;
-const BREADCRUMB_PILL_OVERHEAD: f32 = 24.;
+const BREADCRUMB_PILL_OVERHEAD: f32 = 20.;
 const BREADCRUMB_ICON_WIDTH: f32 = 18.;
 const BREADCRUMB_CHEVRON_WIDTH: f32 = 32.;
 
@@ -695,8 +695,8 @@ fn breadcrumb(
             .flex_row()
             .items_center()
             .gap_1p5()
-            .px(px(10.))
-            .py(px(2.))
+            .px(px(8.))
+            .py(px(1.))
             .rounded_md()
             .cursor_pointer()
             .text_size(px(12.))
