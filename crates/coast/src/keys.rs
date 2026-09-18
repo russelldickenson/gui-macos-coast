@@ -7,9 +7,16 @@ use gpui::Keystroke;
 
 /// Translate a keystroke into bytes for the child process.
 ///
+/// `app_cursor_keys` mirrors the terminal's DECCKM state (`CSI ?1h/l`):
+/// full-screen apps like vim/tig set it so unmodified arrow keys must
+/// arrive as `ESC O A`..`D` (SS3) instead of the default `ESC [ A`..`D`
+/// (CSI). Sending the wrong form can make the app's own parser miss the
+/// arrow key entirely and treat the fallen-apart bytes as separate
+/// keypresses instead.
+///
 /// Returns `None` for application shortcuts (anything with the platform/Cmd
 /// modifier held), which are handled by gpui actions instead.
-pub fn keystroke_to_bytes(ks: &Keystroke) -> Option<Vec<u8>> {
+pub fn keystroke_to_bytes(ks: &Keystroke, app_cursor_keys: bool) -> Option<Vec<u8>> {
     let m = &ks.modifiers;
 
     // Cmd is reserved for app shortcuts (new tab, close tab, quit, ...).
@@ -24,7 +31,7 @@ pub fn keystroke_to_bytes(ks: &Keystroke) -> Option<Vec<u8>> {
     // Modified special keys -> xterm-style CSI sequences.
     // Modifier parameter: 1 + shift(1) + alt(2) + ctrl(4).
     if ctrl || alt || matches_special(&ks.key) {
-        if let Some(seq) = special_key(&ks.key, shift, alt, ctrl) {
+        if let Some(seq) = special_key(&ks.key, shift, alt, ctrl, app_cursor_keys) {
             return Some(seq);
         }
     }
@@ -59,7 +66,7 @@ pub fn keystroke_to_bytes(ks: &Keystroke) -> Option<Vec<u8>> {
     }
 
     // Unmodified special keys.
-    special_key(&ks.key, shift, false, false)
+    special_key(&ks.key, shift, false, false, app_cursor_keys)
 }
 
 fn matches_special(key: &str) -> bool {
@@ -93,10 +100,25 @@ fn matches_special(key: &str) -> bool {
     )
 }
 
-fn special_key(key: &str, shift: bool, alt: bool, ctrl: bool) -> Option<Vec<u8>> {
+fn special_key(
+    key: &str,
+    shift: bool,
+    alt: bool,
+    ctrl: bool,
+    app_cursor_keys: bool,
+) -> Option<Vec<u8>> {
     // CSI modifier parameter for arrow/function keys.
     let param =
         |shift: bool, alt: bool, ctrl: bool| 1 + (shift as u8) + 2 * (alt as u8) + 4 * (ctrl as u8);
+    // Unmodified arrows follow DECCKM (app_cursor_keys); any modifier
+    // always uses the CSI 1;mod form regardless of mode, matching xterm.
+    let arrow = |final_byte: char| {
+        if !shift && !alt && !ctrl && app_cursor_keys {
+            vec![0x1b, b'O', final_byte as u8]
+        } else {
+            csi_mod(final_byte, shift, alt, ctrl, param)
+        }
+    };
 
     let bytes: Vec<u8> = match key {
         "enter" => {
@@ -119,10 +141,10 @@ fn special_key(key: &str, shift: bool, alt: bool, ctrl: bool) -> Option<Vec<u8>>
         }
         "delete" => b"\x1b[3~".to_vec(),
         "escape" => vec![0x1b],
-        "up" => csi_mod('A', shift, alt, ctrl, param),
-        "down" => csi_mod('B', shift, alt, ctrl, param),
-        "right" => csi_mod('C', shift, alt, ctrl, param),
-        "left" => csi_mod('D', shift, alt, ctrl, param),
+        "up" => arrow('A'),
+        "down" => arrow('B'),
+        "right" => arrow('C'),
+        "left" => arrow('D'),
         "home" => {
             if shift || alt || ctrl {
                 format!("\x1b[1;{}H", param(shift, alt, ctrl)).into_bytes()

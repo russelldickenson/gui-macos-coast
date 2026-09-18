@@ -219,7 +219,8 @@ impl TerminalView {
         // Typing while scrolled back into history jumps back to the live
         // output, matching every other terminal.
         self.session.scroll_to_bottom();
-        match crate::keys::keystroke_to_bytes(ks) {
+        let app_cursor_keys = self.session.application_cursor_keys();
+        match crate::keys::keystroke_to_bytes(ks, app_cursor_keys) {
             Some(bytes) => {
                 if let Err(err) = self.session.write(&bytes) {
                     eprintln!("[coast] pty write failed: {err:#}");

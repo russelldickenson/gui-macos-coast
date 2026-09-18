@@ -10,7 +10,7 @@ use std::time::Duration;
 use alacritty_terminal::{
     event::{Event, EventListener},
     grid::{Dimensions, Scroll},
-    term::{test::TermSize, Config},
+    term::{test::TermSize, Config, TermMode},
     vte::ansi::{CursorShape, CursorStyle, Processor},
     Term,
 };
@@ -344,6 +344,15 @@ impl Session {
         if let Ok(mut term) = self.term.lock() {
             term.scroll_display(Scroll::Bottom);
         }
+    }
+
+    /// Whether the app has switched into application cursor key mode
+    /// (DECCKM, `CSI ?1h`) — full-screen apps like vim/tig set this so
+    /// arrow keys arrive as `ESC O A`..`D` instead of the default `ESC [
+    /// A`..`D`. Keyboard input needs to match whichever mode is active, or
+    /// the app's input parser can fail to recognize the arrow sequence.
+    pub fn application_cursor_keys(&self) -> bool {
+        self.with_term(|term| term.mode().contains(TermMode::APP_CURSOR))
     }
 
     /// How far back the viewport is scrolled, and how many lines of
