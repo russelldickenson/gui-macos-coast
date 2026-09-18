@@ -31,7 +31,12 @@ const MEASURE_SAMPLE: &str = "MMMMMMMM";
 /// it works off the app's text system directly rather than a `TerminalView`
 /// (which measures via a window's text system during `prepaint`, where a
 /// full line-shaping pass is easy to come by but a window isn't yet).
-pub fn measure_cell_size(cx: &App, font_family: SharedString, font_size: f32) -> Size<Pixels> {
+pub fn measure_cell_size(
+    cx: &App,
+    font_family: SharedString,
+    font_size: f32,
+    line_spacing: f32,
+) -> Size<Pixels> {
     let text_system = cx.text_system();
     let font_size = px(font_size);
     let font_id = text_system.resolve_font(&gpui::font(font_family));
@@ -41,7 +46,8 @@ pub fn measure_cell_size(cx: &App, font_family: SharedString, font_size: f32) ->
     // `FontMetrics::descent` returns a negative value (below the baseline);
     // negate it to get the positive distance, matching how the platform
     // text system computes line height (see its `-font_metrics.descent`).
-    let height = text_system.ascent(font_id, font_size) - text_system.descent(font_id, font_size);
+    let height =
+        text_system.ascent(font_id, font_size) - text_system.descent(font_id, font_size) + px(line_spacing);
     Size { width, height }
 }
 
@@ -59,6 +65,7 @@ pub struct TerminalView {
     session: Arc<Session>,
     font_family: SharedString,
     font_size: f32,
+    line_spacing: f32,
     theme: coast_themes::Theme,
     cursor_blink: bool,
     focus_handle: FocusHandle,
@@ -113,6 +120,7 @@ impl TerminalView {
         session: Arc<Session>,
         font_family: SharedString,
         font_size: f32,
+        line_spacing: f32,
         theme: coast_themes::Theme,
         cursor_blink: bool,
         show_breadcrumb: bool,
@@ -123,12 +131,13 @@ impl TerminalView {
             session,
             font_family,
             font_size,
+            line_spacing,
             theme,
             cursor_blink,
             focus_handle: cx.focus_handle(),
             cell_size: Size {
                 width: px(font_size * 0.6),
-                height: px(font_size * 1.2),
+                height: px(font_size * 1.2) + px(line_spacing),
             },
             font_key: (SharedString::default(), 0),
             cursor_visible: true,
@@ -180,6 +189,7 @@ impl TerminalView {
         &mut self,
         font_family: SharedString,
         font_size: f32,
+        line_spacing: f32,
         theme: coast_themes::Theme,
         cursor_blink: bool,
         show_breadcrumb: bool,
@@ -188,6 +198,7 @@ impl TerminalView {
     ) {
         self.font_family = font_family;
         self.font_size = font_size;
+        self.line_spacing = line_spacing;
         self.theme = theme;
         self.cursor_blink = cursor_blink;
         self.breadcrumb_theme = breadcrumb_theme;
@@ -898,6 +909,7 @@ impl Element for TerminalElement {
         }
         let snapshot = self.view.read(cx);
         let font_size = px(snapshot.font_size);
+        let line_spacing = snapshot.line_spacing;
         let theme = snapshot.theme.clone();
         let base_font = snapshot.base_font();
         let font_key = (snapshot.font_family.clone(), snapshot.font_size.to_bits());
@@ -925,7 +937,7 @@ impl Element for TerminalElement {
             );
             cell = Size {
                 width: px(line.x_for_index(MEASURE_SAMPLE.len()) / px(MEASURE_SAMPLE.len() as f32)),
-                height: line.ascent + line.descent,
+                height: line.ascent + line.descent + px(line_spacing),
             };
             self.view.update(cx, |view, _| {
                 view.cell_size = cell;

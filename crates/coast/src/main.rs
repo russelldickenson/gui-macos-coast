@@ -141,6 +141,7 @@ fn main() {
             cx,
             SharedString::new(settings.font_family.clone()),
             settings.font_size,
+            settings.line_spacing,
         );
         let window_size = Size {
             width: cell.width * settings.default_cols as f32,

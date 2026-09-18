@@ -187,6 +187,7 @@ impl Workspace {
                 session.clone(),
                 SharedString::new(settings.font_family.clone()),
                 settings.font_size,
+                settings.line_spacing,
                 theme,
                 settings.cursor_blink,
                 settings.show_breadcrumb,
@@ -409,6 +410,7 @@ impl Workspace {
 
         let font_family = SharedString::new(self.settings.font_family.clone());
         let font_size = self.settings.font_size;
+        let line_spacing = self.settings.line_spacing;
         let theme = self.theme.clone();
         let cursor_blink = self.settings.cursor_blink;
         let show_breadcrumb = self.settings.show_breadcrumb;
@@ -419,6 +421,7 @@ impl Workspace {
                     view.update_settings(
                         font_family.clone(),
                         font_size,
+                        line_spacing,
                         theme.clone(),
                         cursor_blink,
                         show_breadcrumb,

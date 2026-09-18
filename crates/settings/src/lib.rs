@@ -3,6 +3,7 @@
 //! ```toml
 //! font_family = "JetBrains Mono"
 //! font_size = 13.0
+//! line_spacing = 0.0 # extra px between rows, 0-4
 //! theme = "Tokyo Night"
 //! chrome_theme = "Dark Gray"
 //! breadcrumb_theme = "Dark"
@@ -28,6 +29,10 @@ fn default_font_family() -> String {
 
 fn default_font_size() -> f32 {
     12.0
+}
+
+fn default_line_spacing() -> f32 {
+    0.0
 }
 
 fn default_theme() -> String {
@@ -76,6 +81,9 @@ pub struct Settings {
     pub font_family: String,
     #[serde(default = "default_font_size")]
     pub font_size: f32,
+    /// Extra px added between rows, on top of the font's own line height.
+    #[serde(default = "default_line_spacing")]
+    pub line_spacing: f32,
     #[serde(default = "default_theme")]
     pub theme: String,
     #[serde(default = "default_chrome_theme")]
@@ -115,6 +123,7 @@ impl Default for Settings {
         Self {
             font_family: default_font_family(),
             font_size: default_font_size(),
+            line_spacing: default_line_spacing(),
             theme: default_theme(),
             chrome_theme: default_chrome_theme(),
             scrollback_lines: default_scrollback_lines(),
@@ -289,6 +298,7 @@ mod tests {
         let s = Settings::default();
         assert_eq!(s.font_family, "Menlo");
         assert_eq!(s.font_size, 12.0);
+        assert_eq!(s.line_spacing, 0.0);
         assert_eq!(s.theme, "Campbell");
         assert_eq!(s.chrome_theme, "Light");
         assert_eq!(s.scrollback_lines, 10_000);

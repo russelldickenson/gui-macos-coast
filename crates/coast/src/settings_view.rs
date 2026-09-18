@@ -72,6 +72,7 @@ enum FocusSlot {
     CursorColor,
     FontFamily,
     FontSize,
+    LineSpacing,
     Cols,
     Rows,
     Scrollback,
@@ -81,7 +82,7 @@ enum FocusSlot {
 }
 
 impl FocusSlot {
-    const ORDER: [FocusSlot; 14] = [
+    const ORDER: [FocusSlot; 15] = [
         FocusSlot::Theme,
         FocusSlot::Import,
         FocusSlot::Chrome,
@@ -90,6 +91,7 @@ impl FocusSlot {
         FocusSlot::CursorColor,
         FocusSlot::FontFamily,
         FocusSlot::FontSize,
+        FocusSlot::LineSpacing,
         FocusSlot::Cols,
         FocusSlot::Rows,
         FocusSlot::Scrollback,
@@ -128,6 +130,7 @@ impl FocusSlot {
             FocusSlot::CursorColor => &view.cursor_color_field.focus,
             FocusSlot::FontFamily => &view.font_family_focus,
             FocusSlot::FontSize => &view.font_size_focus,
+            FocusSlot::LineSpacing => &view.line_spacing_focus,
             FocusSlot::Cols => &view.cols_field.focus,
             FocusSlot::Rows => &view.rows_field.focus,
             FocusSlot::Scrollback => &view.scrollback_field.focus,
@@ -201,6 +204,7 @@ enum OpenDropdown {
     Theme,
     FontFamily,
     FontSize,
+    LineSpacing,
 }
 
 pub struct SettingsView {
@@ -214,6 +218,7 @@ pub struct SettingsView {
     cursor_blink_focus: FocusHandle,
     font_family_focus: FocusHandle,
     font_size_focus: FocusHandle,
+    line_spacing_focus: FocusHandle,
     confirm_close_focus: FocusHandle,
     breadcrumb_focus: FocusHandle,
     breadcrumb_theme_focus: FocusHandle,
@@ -266,6 +271,7 @@ impl SettingsView {
             cursor_blink_focus: cx.focus_handle(),
             font_family_focus: cx.focus_handle(),
             font_size_focus: cx.focus_handle(),
+            line_spacing_focus: cx.focus_handle(),
             confirm_close_focus: cx.focus_handle(),
             breadcrumb_focus: cx.focus_handle(),
             breadcrumb_theme_focus: cx.focus_handle(),
@@ -610,6 +616,12 @@ impl Render for SettingsView {
                 "Size",
                 None,
                 font_size_dropdown(self, focused_field(&self.font_size_focus), cx)
+                    .into_any_element(),
+            ),
+            setting_row(
+                "Line spacing",
+                None,
+                line_spacing_dropdown(self, focused_field(&self.line_spacing_focus), cx)
                     .into_any_element(),
             ),
         ]);
@@ -1441,6 +1453,48 @@ fn font_family_dropdown(
             is_focused,
             next: FocusSlot::FontFamily.next().handle(view),
             prev: FocusSlot::FontFamily.prev().handle(view),
+        },
+        cx,
+    )
+}
+
+fn line_spacing_dropdown(
+    view: &SettingsView,
+    is_focused: bool,
+    cx: &mut Context<SettingsView>,
+) -> impl IntoElement {
+    let options: Vec<(String, String)> = (0..=4)
+        .map(|size| (size.to_string(), format!("{size}px")))
+        .collect();
+    let current = format_f32(view.settings.line_spacing);
+    let current_label = format!("{current}px");
+    dropdown(
+        current_label,
+        view.open_dropdown == OpenDropdown::LineSpacing,
+        view.dropdown_highlight,
+        100.,
+        &options,
+        move |size| *size == current,
+        |this, _window, cx| {
+            this.open_dropdown = if this.open_dropdown == OpenDropdown::LineSpacing {
+                OpenDropdown::None
+            } else {
+                OpenDropdown::LineSpacing
+            };
+            cx.notify();
+        },
+        |this| this.open_dropdown = OpenDropdown::None,
+        |this, size: String, _window, cx| {
+            if let Ok(v) = size.parse::<f32>() {
+                this.settings.line_spacing = v;
+                this.commit(cx);
+            }
+        },
+        Nav {
+            focus: FocusSlot::LineSpacing.handle(view),
+            is_focused,
+            next: FocusSlot::LineSpacing.next().handle(view),
+            prev: FocusSlot::LineSpacing.prev().handle(view),
         },
         cx,
     )
