@@ -10,6 +10,7 @@
 //! # ... plus cursor, selection, and the 16 ansi colors
 //! ```
 
+mod breadcrumb;
 mod builtin;
 mod chrome;
 mod terminal_import;
@@ -19,6 +20,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+pub use breadcrumb::{builtin_breadcrumb_themes, BreadcrumbTheme};
 pub use builtin::builtin_themes;
 pub use chrome::{builtin_chrome_themes, ChromeTheme};
 pub use terminal_import::import_terminal_file;

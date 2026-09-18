@@ -68,6 +68,7 @@ pub struct Workspace {
     settings: coast_settings::Settings,
     theme: coast_themes::Theme,
     chrome: coast_themes::ChromeTheme,
+    breadcrumb_theme: coast_themes::BreadcrumbTheme,
     /// The live "cols x rows" HUD shown while resizing, if currently visible.
     resize_hud: Option<(u16, u16)>,
     /// Bumped on every `show_resize_hud` call so a stale auto-hide timer
@@ -93,12 +94,14 @@ impl Workspace {
         let settings = coast_settings::Settings::load_default().unwrap_or_default();
         let theme = settings.theme();
         let chrome = settings.chrome_theme();
+        let breadcrumb_theme = settings.breadcrumb_theme();
         let mut this = Self {
             tabs: Vec::new(),
             active: 0,
             settings,
             theme,
             chrome,
+            breadcrumb_theme,
             resize_hud: None,
             resize_hud_epoch: 0,
             pending_close: None,
@@ -176,6 +179,7 @@ impl Workspace {
         };
         let settings = self.settings.clone();
         let theme = self.theme.clone();
+        let breadcrumb_theme = self.breadcrumb_theme.clone();
         let view = cx.new(|cx| {
             TerminalView::new(
                 session.clone(),
@@ -184,6 +188,7 @@ impl Workspace {
                 theme,
                 settings.cursor_blink,
                 settings.show_breadcrumb,
+                breadcrumb_theme,
                 cx,
             )
         });
@@ -376,6 +381,7 @@ impl Workspace {
     pub fn apply_settings(&mut self, settings: coast_settings::Settings, cx: &mut Context<Self>) {
         self.theme = settings.theme();
         self.chrome = settings.chrome_theme();
+        self.breadcrumb_theme = settings.breadcrumb_theme();
         self.settings = settings;
         self.schedule_save(cx);
 
@@ -384,6 +390,7 @@ impl Workspace {
         let theme = self.theme.clone();
         let cursor_blink = self.settings.cursor_blink;
         let show_breadcrumb = self.settings.show_breadcrumb;
+        let breadcrumb_theme = self.breadcrumb_theme.clone();
         for tab in &self.tabs {
             if let TabKind::Terminal(view) = &tab.kind {
                 view.update(cx, |view, cx| {
@@ -393,6 +400,7 @@ impl Workspace {
                         theme.clone(),
                         cursor_blink,
                         show_breadcrumb,
+                        breadcrumb_theme.clone(),
                         cx,
                     )
                 });

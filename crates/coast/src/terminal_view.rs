@@ -11,8 +11,8 @@ use alacritty_terminal::{
     vte::ansi::{Color as TermColor, CursorShape, NamedColor, Rgb},
 };
 use gpui::{
-    anchored, deferred, fill, point, prelude::*, px, relative, rgb, svg, App, Bounds, Context,
-    Element, ElementId, Entity, EventEmitter, FocusHandle, Focusable, Font, FontStyle, FontWeight,
+    anchored, deferred, fill, point, prelude::*, px, relative, svg, App, Bounds, Context, Element,
+    ElementId, Entity, EventEmitter, FocusHandle, Focusable, Font, FontStyle, FontWeight,
     GlobalElementId, Hsla, InspectorElementId, IntoElement, KeyDownEvent, Keystroke, LayoutId,
     MouseButton, PaintQuad, Pixels, Point, ScrollWheelEvent, ShapedLine, SharedString, Size,
     StrikethroughStyle, Style, TextRun, UnderlineStyle, Window,
@@ -83,6 +83,7 @@ pub struct TerminalView {
     scrollbar_hovered: bool,
     /// Whether the directory breadcrumb bar is shown above the grid.
     show_breadcrumb: bool,
+    breadcrumb_theme: coast_themes::BreadcrumbTheme,
     /// The foreground process's (or the shell's, if idle) current working
     /// directory, refreshed periodically while `show_breadcrumb` is on.
     current_dir: Option<std::path::PathBuf>,
@@ -116,6 +117,7 @@ impl TerminalView {
         theme: coast_themes::Theme,
         cursor_blink: bool,
         show_breadcrumb: bool,
+        breadcrumb_theme: coast_themes::BreadcrumbTheme,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut this = Self {
@@ -140,6 +142,7 @@ impl TerminalView {
             scrollbar_epoch: 0,
             scrollbar_hovered: false,
             show_breadcrumb,
+            breadcrumb_theme,
             current_dir: None,
             last_cwd_check: Instant::now() - CWD_POLL_INTERVAL,
             breadcrumb_open: false,
@@ -168,12 +171,14 @@ impl TerminalView {
         theme: coast_themes::Theme,
         cursor_blink: bool,
         show_breadcrumb: bool,
+        breadcrumb_theme: coast_themes::BreadcrumbTheme,
         cx: &mut Context<Self>,
     ) {
         self.font_family = font_family;
         self.font_size = font_size;
         self.theme = theme;
         self.cursor_blink = cursor_blink;
+        self.breadcrumb_theme = breadcrumb_theme;
         self.font_key = (SharedString::default(), 0);
         if self.show_breadcrumb != show_breadcrumb {
             self.show_breadcrumb = show_breadcrumb;
@@ -405,6 +410,7 @@ impl Render for TerminalView {
                     &dir,
                     self.breadcrumb_open,
                     self.content_width,
+                    &self.breadcrumb_theme,
                     &subdirs,
                     cx,
                 )
@@ -482,11 +488,6 @@ fn scrollbar(session: &Session, visible: bool, cx: &mut Context<TerminalView>) -
 }
 
 const BREADCRUMB_BAR_HEIGHT: f32 = 40.;
-const BREADCRUMB_PILL: u32 = 0x2c2d3a;
-const BREADCRUMB_PILL_BORDER: u32 = 0x40424f;
-const BREADCRUMB_PILL_HOVER: u32 = 0x363848;
-const BREADCRUMB_TEXT: u32 = 0xd7d8e2;
-const BREADCRUMB_CHEVRON: u32 = 0x7c7e90;
 
 /// One clickable pill in the breadcrumb: a display label plus the full path
 /// clicking it navigates to (an ancestor for every segment but the last).
@@ -634,6 +635,7 @@ fn breadcrumb(
     path: &std::path::Path,
     open: bool,
     content_width: Pixels,
+    theme: &coast_themes::BreadcrumbTheme,
     subdirs: &[String],
     cx: &mut Context<TerminalView>,
 ) -> impl IntoElement {
@@ -642,6 +644,12 @@ fn breadcrumb(
     let available_width = (content_width - px(16.)).max(px(0.));
     let items = collapse_breadcrumb(&segments, available_width);
     let last_ix = items.len().saturating_sub(1);
+
+    let pill_bg = colors::hsla(theme.pill);
+    let pill_border = colors::hsla(theme.pill_border);
+    let pill_hover = colors::hsla(theme.pill_hover);
+    let text_color = colors::hsla(theme.text);
+    let muted = colors::hsla(theme.muted);
 
     let mut bar = gpui::div()
         .flex_none()
@@ -652,7 +660,7 @@ fn breadcrumb(
         .flex_row()
         .items_center()
         .gap_2()
-        .bg(rgb(BREADCRUMB_PILL));
+        .bg(pill_bg);
 
     for (ix, item) in items.iter().enumerate() {
         let is_last = ix == last_ix;
@@ -662,15 +670,12 @@ fn breadcrumb(
                     gpui::div()
                         .px(px(4.))
                         .text_size(px(12.))
-                        .text_color(rgb(BREADCRUMB_CHEVRON))
+                        .text_color(muted)
                         .child("…"),
                 );
                 if !is_last {
                     bar = bar.child(
-                        gpui::div()
-                            .text_size(px(16.))
-                            .text_color(rgb(BREADCRUMB_CHEVRON))
-                            .child("›"),
+                        gpui::div().text_size(px(16.)).text_color(muted).child("›"),
                     );
                 }
                 continue;
@@ -694,11 +699,11 @@ fn breadcrumb(
             .rounded_md()
             .cursor_pointer()
             .text_size(px(12.))
-            .bg(rgb(BREADCRUMB_PILL))
+            .bg(pill_bg)
             .border_1()
-            .border_color(rgb(BREADCRUMB_PILL_BORDER))
-            .text_color(rgb(BREADCRUMB_TEXT))
-            .hover(|s| s.bg(rgb(BREADCRUMB_PILL_HOVER)));
+            .border_color(pill_border)
+            .text_color(text_color)
+            .hover(move |s| s.bg(pill_hover));
 
         if crumb.is_home {
             pill = pill.child("⌂");
@@ -711,12 +716,7 @@ fn breadcrumb(
                 cx.listener(move |view, _, _window, cx| view.cd_to(&target, cx)),
             );
             bar = bar.child(pill);
-            bar = bar.child(
-                gpui::div()
-                    .text_size(px(16.))
-                    .text_color(rgb(BREADCRUMB_CHEVRON))
-                    .child("›"),
-            );
+            bar = bar.child(gpui::div().text_size(px(16.)).text_color(muted).child("›"));
             continue;
         }
 
@@ -741,7 +741,7 @@ fn breadcrumb(
                 svg()
                     .path("icons/chevron-down.svg")
                     .size(px(16.))
-                    .text_color(rgb(BREADCRUMB_CHEVRON)),
+                    .text_color(muted),
             )
             .on_mouse_down(MouseButton::Left, cx.listener(toggle_breadcrumb));
 
@@ -764,9 +764,9 @@ fn breadcrumb(
                 .flex()
                 .flex_col()
                 .rounded_md()
-                .bg(rgb(BREADCRUMB_PILL))
+                .bg(pill_bg)
                 .border_1()
-                .border_color(rgb(BREADCRUMB_PILL_BORDER))
+                .border_color(pill_border)
                 .shadow_md();
 
             if subdirs.is_empty() {
@@ -775,7 +775,7 @@ fn breadcrumb(
                         .px_2()
                         .py_1()
                         .text_xs()
-                        .text_color(rgb(BREADCRUMB_CHEVRON))
+                        .text_color(muted)
                         .child("No subdirectories"),
                 );
             } else {
@@ -787,16 +787,16 @@ fn breadcrumb(
                         .px_2()
                         .py_1()
                         .text_xs()
-                        .text_color(rgb(BREADCRUMB_TEXT))
+                        .text_color(text_color)
                         .cursor_pointer()
-                        .hover(|s| s.bg(rgb(BREADCRUMB_PILL_HOVER)))
+                        .hover(move |s| s.bg(pill_hover))
                         .child(name.clone())
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |view, _, _window, cx| view.cd_to(&child_path, cx)),
                         );
                     if ix != last {
-                        item = item.border_b_1().border_color(rgb(BREADCRUMB_PILL_BORDER));
+                        item = item.border_b_1().border_color(pill_border);
                     }
                     list = list.child(item);
                 }

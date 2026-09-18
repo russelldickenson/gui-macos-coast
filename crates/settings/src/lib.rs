@@ -5,6 +5,7 @@
 //! font_size = 13.0
 //! theme = "Tokyo Night"
 //! chrome_theme = "Dark Gray"
+//! breadcrumb_theme = "Dark"
 //! scrollback_lines = 10000
 //! cursor_blink = true
 //! cursor_shape = "block" # "block" | "beam" | "underline"
@@ -33,6 +34,10 @@ fn default_theme() -> String {
 
 fn default_chrome_theme() -> String {
     "Light".to_string()
+}
+
+fn default_breadcrumb_theme() -> String {
+    "Dark".to_string()
 }
 
 fn default_scrollback_lines() -> usize {
@@ -97,6 +102,10 @@ pub struct Settings {
     /// the theme's own cursor color.
     #[serde(default)]
     pub cursor_color: Option<String>,
+    /// Color theme for the directory breadcrumb bar — independent of
+    /// `chrome_theme` (the tab strip's own light/dark setting).
+    #[serde(default = "default_breadcrumb_theme")]
+    pub breadcrumb_theme: String,
 }
 
 impl Default for Settings {
@@ -114,6 +123,7 @@ impl Default for Settings {
             confirm_close_tab: default_confirm_close_tab(),
             show_breadcrumb: default_show_breadcrumb(),
             cursor_color: None,
+            breadcrumb_theme: default_breadcrumb_theme(),
         }
     }
 }
@@ -175,6 +185,18 @@ impl Settings {
         }
         coast_themes::ChromeTheme::find("Light").expect("Light is built in")
     }
+
+    /// Resolve the configured breadcrumb theme, built-in or user TOML,
+    /// falling back to Dark when the name is unknown.
+    pub fn breadcrumb_theme(&self) -> coast_themes::BreadcrumbTheme {
+        if let Some(theme) = coast_themes::BreadcrumbTheme::find(&self.breadcrumb_theme) {
+            return theme;
+        }
+        if let Some(theme) = load_user_breadcrumb_theme(&self.breadcrumb_theme) {
+            return theme;
+        }
+        coast_themes::BreadcrumbTheme::find("Dark").expect("Dark is built in")
+    }
 }
 
 /// `~/Library/Application Support/Coast/config.toml`.
@@ -235,6 +257,19 @@ fn load_user_chrome_theme(name: &str) -> Option<coast_themes::ChromeTheme> {
     toml::from_str(&raw).ok()
 }
 
+/// `~/Library/Application Support/Coast/breadcrumb-themes/<name>.toml`.
+pub fn user_breadcrumb_theme_path(name: &str) -> PathBuf {
+    support_dir()
+        .join("breadcrumb-themes")
+        .join(format!("{name}.toml"))
+}
+
+fn load_user_breadcrumb_theme(name: &str) -> Option<coast_themes::BreadcrumbTheme> {
+    let path = user_breadcrumb_theme_path(name);
+    let raw = std::fs::read_to_string(path).ok()?;
+    toml::from_str(&raw).ok()
+}
+
 fn support_dir() -> PathBuf {
     let home = std::env::var_os("HOME").expect("HOME is set");
     PathBuf::from(home)
@@ -261,6 +296,7 @@ mod tests {
         assert_eq!(s.default_rows, 30);
         assert!(s.confirm_close_tab);
         assert!(!s.show_breadcrumb);
+        assert_eq!(s.breadcrumb_theme, "Dark");
     }
 
     #[test]
@@ -301,6 +337,24 @@ mod tests {
             ..Settings::default()
         };
         assert_eq!(s.chrome_theme().name, "Light");
+    }
+
+    #[test]
+    fn resolves_builtin_breadcrumb_theme() {
+        let s = Settings {
+            breadcrumb_theme: "Light".to_string(),
+            ..Settings::default()
+        };
+        assert_eq!(s.breadcrumb_theme().name, "Light");
+    }
+
+    #[test]
+    fn unknown_breadcrumb_theme_falls_back_to_dark() {
+        let s = Settings {
+            breadcrumb_theme: "No Such Theme".to_string(),
+            ..Settings::default()
+        };
+        assert_eq!(s.breadcrumb_theme().name, "Dark");
     }
 
     #[test]

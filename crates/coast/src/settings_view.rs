@@ -77,10 +77,11 @@ enum FocusSlot {
     Scrollback,
     ConfirmClose,
     Breadcrumb,
+    BreadcrumbTheme,
 }
 
 impl FocusSlot {
-    const ORDER: [FocusSlot; 13] = [
+    const ORDER: [FocusSlot; 14] = [
         FocusSlot::Theme,
         FocusSlot::Import,
         FocusSlot::Chrome,
@@ -94,6 +95,7 @@ impl FocusSlot {
         FocusSlot::Scrollback,
         FocusSlot::ConfirmClose,
         FocusSlot::Breadcrumb,
+        FocusSlot::BreadcrumbTheme,
     ];
 
     fn index(self) -> usize {
@@ -131,6 +133,7 @@ impl FocusSlot {
             FocusSlot::Scrollback => &view.scrollback_field.focus,
             FocusSlot::ConfirmClose => &view.confirm_close_focus,
             FocusSlot::Breadcrumb => &view.breadcrumb_focus,
+            FocusSlot::BreadcrumbTheme => &view.breadcrumb_theme_focus,
         }
     }
 
@@ -213,6 +216,7 @@ pub struct SettingsView {
     font_size_focus: FocusHandle,
     confirm_close_focus: FocusHandle,
     breadcrumb_focus: FocusHandle,
+    breadcrumb_theme_focus: FocusHandle,
     cols_field: TextField,
     cols_text: String,
     rows_field: TextField,
@@ -264,6 +268,7 @@ impl SettingsView {
             font_size_focus: cx.focus_handle(),
             confirm_close_focus: cx.focus_handle(),
             breadcrumb_focus: cx.focus_handle(),
+            breadcrumb_theme_focus: cx.focus_handle(),
             cols_field: TextField::new(cx),
             rows_field: TextField::new(cx),
             scrollback_field: TextField::new(cx),
@@ -728,6 +733,28 @@ impl Render for SettingsView {
                         this.settings.show_breadcrumb = !this.settings.show_breadcrumb;
                         this.commit(cx);
                     },
+                    cx,
+                )
+                .into_any_element(),
+            ),
+            setting_row(
+                "Breadcrumb theme",
+                None,
+                radio_group(
+                    &[
+                        ("Light".to_string(), "Light".to_string()),
+                        ("Dark".to_string(), "Dark".to_string()),
+                    ],
+                    {
+                        let current = self.settings.breadcrumb_theme.clone();
+                        move |name| *name == current
+                    },
+                    |this, name: String, _window, cx| {
+                        this.settings.breadcrumb_theme = name;
+                        this.commit(cx);
+                    },
+                    FocusSlot::BreadcrumbTheme.nav(self, window),
+                    RadioLayout::Horizontal,
                     cx,
                 )
                 .into_any_element(),
