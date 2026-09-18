@@ -1074,8 +1074,14 @@ impl Element for TerminalElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let _ = cx;
         window.paint_quad(fill(bounds, prepaint.background));
+        // `ShapedLine::paint` only draws glyphs/underline/strikethrough —
+        // per-run background colors (used for SGR reverse-video and
+        // explicit background colors) are a separate call that has to run
+        // first, or every cell's background_color is silently dropped.
+        for (origin, line) in &prepaint.rows {
+            let _ = line.paint_background(*origin, prepaint.cell.height, window, cx);
+        }
         for (origin, line) in &prepaint.rows {
             let _ = line.paint(*origin, prepaint.cell.height, window, cx);
         }
