@@ -3,6 +3,7 @@
 //! Styled after Windows Terminal: tabs live in a custom-drawn titlebar row,
 //! traffic lights inset on the left, `+` button for new tabs.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -157,7 +158,7 @@ impl Workspace {
         .detach();
     }
 
-    pub fn add_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn add_tab(&mut self, cwd: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
         let cols = self.settings.default_cols;
         let rows = self.settings.default_rows;
         let session = match Session::spawn(SpawnOptions {
@@ -167,6 +168,7 @@ impl Workspace {
             rows,
             scrollback: self.settings.scrollback_lines,
             cursor_shape: cursor_shape_from_setting(&self.settings.cursor_shape),
+            cwd,
         }) {
             Ok(session) => {
                 eprintln!("[coast] spawned {} ({cols}x{rows})", session.cols());
@@ -203,6 +205,26 @@ impl Workspace {
         self.sync_active_terminal(cx);
         cx.notify();
         self.focus_active(window, cx);
+    }
+
+    /// Each terminal tab's current directory, for persistence at quit.
+    /// Settings tabs are skipped (not restorable); falls back to `$HOME`
+    /// per-tab if the cwd can't be determined (process already gone,
+    /// sandboxing, etc).
+    pub fn save_session_state(&self, cx: &App) -> coast_settings::session_state::SavedSession {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let tabs = self
+            .tabs
+            .iter()
+            .filter_map(|tab| match &tab.kind {
+                TabKind::Terminal(view) => {
+                    let cwd = view.read(cx).session().current_dir().or_else(|| home.clone())?;
+                    Some(coast_settings::session_state::SavedTab { cwd })
+                }
+                TabKind::Settings(_) => None,
+            })
+            .collect();
+        coast_settings::session_state::SavedSession { tabs }
     }
 
     /// Show the live "cols x rows" HUD, resetting its auto-hide timer. Only
@@ -578,7 +600,7 @@ impl Render for Workspace {
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|this: &mut Workspace, _, window, cx| {
-                                    this.add_tab(window, cx)
+                                    this.add_tab(None, window, cx)
                                 }),
                             ),
                     ),
@@ -642,7 +664,7 @@ impl Render for Workspace {
             .size_full()
             .bg(bg)
             .on_action(cx.listener(|this, _: &crate::NewTab, window, cx| {
-                this.add_tab(window, cx)
+                this.add_tab(None, window, cx)
             }))
             .on_action(cx.listener(|this, _: &crate::CloseTab, window, cx| {
                 let active = this.active_index();

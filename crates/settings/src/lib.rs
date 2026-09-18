@@ -20,6 +20,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+pub mod session_state;
+
 fn default_font_family() -> String {
     "Menlo".to_string()
 }
@@ -270,7 +272,7 @@ fn load_user_breadcrumb_theme(name: &str) -> Option<coast_themes::BreadcrumbThem
     toml::from_str(&raw).ok()
 }
 
-fn support_dir() -> PathBuf {
+pub(crate) fn support_dir() -> PathBuf {
     let home = std::env::var_os("HOME").expect("HOME is set");
     PathBuf::from(home)
         .join("Library")

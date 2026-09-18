@@ -189,12 +189,36 @@ fn main() {
         // already mid-dispatch, and re-entering it via `WindowHandle::update`
         // from an App-level action/keystroke callback silently fails.
 
-        // Open the first tab and focus it.
+        // Restore the tabs open at last quit, one per saved directory
+        // (falling back to $HOME if a saved directory no longer exists),
+        // or a single default tab if there's no saved state.
+        let saved = coast_settings::session_state::SavedSession::load()
+            .map(|s| s.tabs)
+            .filter(|tabs| !tabs.is_empty());
         handle
-            .update(cx, |workspace, window, cx| {
-                workspace.add_tab(window, cx);
+            .update(cx, |workspace, window, cx| match saved {
+                Some(tabs) => {
+                    for tab in tabs {
+                        let cwd = tab.cwd.is_dir().then_some(tab.cwd);
+                        workspace.add_tab(cwd, window, cx);
+                    }
+                }
+                None => workspace.add_tab(None, window, cx),
             })
             .ok();
+
+        // Save each terminal tab's cwd so the next launch can restore
+        // them. Fires on every quit path (the Quit action, the last tab
+        // closing, the reaper quitting after the last shell exits, and
+        // Cmd+Q/Dock quit) since they all funnel through `cx.quit()`.
+        cx.on_app_quit(move |cx| {
+            let saved = handle
+                .update(cx, |workspace, _window, cx| workspace.save_session_state(cx))
+                .unwrap_or_default();
+            let _ = saved.save();
+            async {}
+        })
+        .detach();
 
         cx.activate(true);
     });

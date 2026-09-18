@@ -78,6 +78,8 @@ pub struct SpawnOptions {
     /// The cursor shape shown until an app requests a different one (e.g.
     /// via DECSCUSR).
     pub cursor_shape: CursorShape,
+    /// Directory the shell should start in; `None` falls back to `$HOME`.
+    pub cwd: Option<std::path::PathBuf>,
 }
 
 impl SpawnOptions {
@@ -90,6 +92,7 @@ impl SpawnOptions {
             rows,
             scrollback: 10_000,
             cursor_shape: CursorShape::Block,
+            cwd: None,
         }
     }
 }
@@ -132,8 +135,10 @@ impl Session {
         // this (tig, vim, tmux, ...) use their full truecolor styling
         // instead of falling back to a more conservative one.
         cmd.env("COLORTERM", "truecolor");
-        // Login shells already cd to $HOME; be explicit anyway.
-        if let Some(home) = std::env::var_os("HOME") {
+        if let Some(cwd) = &opts.cwd {
+            cmd.cwd(cwd);
+        } else if let Some(home) = std::env::var_os("HOME") {
+            // Login shells already cd to $HOME; be explicit anyway.
             cmd.cwd(home);
         }
 
@@ -444,6 +449,7 @@ mod tests {
             rows: 24,
             scrollback: 1000,
             cursor_shape: CursorShape::Block,
+            cwd: None,
         })
         .expect("spawn session");
 
@@ -463,6 +469,7 @@ mod tests {
             rows: 24,
             scrollback: 1000,
             cursor_shape: CursorShape::Block,
+            cwd: None,
         })
         .expect("spawn session");
 
@@ -489,6 +496,7 @@ mod tests {
             rows: 24,
             scrollback: 1000,
             cursor_shape: CursorShape::Block,
+            cwd: None,
         })
         .expect("spawn session");
 
@@ -516,5 +524,32 @@ mod tests {
         assert_eq!(seen, Some(tmp.clone()), "current_dir never reported {tmp:?}");
 
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn spawn_honors_explicit_cwd() {
+        let dir = std::env::temp_dir().join(format!("coast-cwd-probe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+
+        let session = Session::spawn(SpawnOptions {
+            shell: "/bin/sh".to_string(),
+            args: vec![],
+            cols: 80,
+            rows: 24,
+            scrollback: 1000,
+            cursor_shape: CursorShape::Block,
+            cwd: Some(dir.clone()),
+        })
+        .expect("spawn session");
+
+        session.write(b"pwd\n").expect("write to pty");
+        let text = wait_for_text(&session, dir.to_str().unwrap(), Duration::from_secs(10));
+        assert!(
+            text.contains(dir.to_str().unwrap()),
+            "expected pwd to report {dir:?}, got:\n{text}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
