@@ -569,18 +569,22 @@ impl Render for Workspace {
 
             // A divider between two adjacent inactive tabs, and to the
             // right of the rightmost tab if it's inactive. The active tab
-            // already has its own border, so it never needs one.
+            // already has its own border, so its divider is just made
+            // transparent rather than omitted — always reserving the same
+            // space, like the tab's own border above, so switching which
+            // tab is active never shifts any tab's position.
             let next_is_active = active == ix + 1;
-            if !is_active && !next_is_active {
-                bar = bar.child(
-                    div().h(px(TAB_HEIGHT)).flex().items_center().child(
-                        div()
-                            .w(px(1.))
-                            .h(px(TAB_HEIGHT - 16.))
-                            .bg(chrome_inactive_tab_text),
+            bar = bar.child(
+                div().h(px(TAB_HEIGHT)).flex().items_center().child(
+                    div().w(px(1.)).h(px(TAB_HEIGHT - 16.)).bg(
+                        if is_active || next_is_active {
+                            Hsla::transparent_black()
+                        } else {
+                            chrome_inactive_tab_text
+                        },
                     ),
-                );
-            }
+                ),
+            );
         }
 
         bar = bar
