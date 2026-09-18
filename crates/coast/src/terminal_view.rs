@@ -66,7 +66,6 @@ pub struct TerminalView {
     font_key: (SharedString, u32),
     cursor_visible: bool,
     last_blink: Instant,
-    title: SharedString,
     exited: Option<i32>,
     traced_output: bool,
     /// Set after the tab's first resize (spawn-size -> actual window size,
@@ -134,7 +133,6 @@ impl TerminalView {
             font_key: (SharedString::default(), 0),
             cursor_visible: true,
             last_blink: Instant::now(),
-            title: SharedString::new_static("Coast"),
             exited: None,
             traced_output: false,
             has_resized_once: false,
@@ -154,8 +152,22 @@ impl TerminalView {
         this
     }
 
-    pub fn title(&self) -> &str {
-        &self.title
+    /// The tab label: the leaf name of the tab's current directory (`~`
+    /// for home), falling back to "Coast" before the first cwd poll
+    /// completes or if it can't be resolved.
+    pub fn title(&self) -> String {
+        match &self.current_dir {
+            Some(dir) => {
+                let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+                if home.as_deref() == Some(dir.as_path()) {
+                    return "~".to_string();
+                }
+                dir.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| dir.to_string_lossy().into_owned())
+            }
+            None => "Coast".to_string(),
+        }
     }
 
     pub fn session(&self) -> &Session {
@@ -183,9 +195,6 @@ impl TerminalView {
         if self.show_breadcrumb != show_breadcrumb {
             self.show_breadcrumb = show_breadcrumb;
             self.breadcrumb_open = false;
-            if !show_breadcrumb {
-                self.current_dir = None;
-            }
         }
         cx.notify();
     }
@@ -253,11 +262,8 @@ impl TerminalView {
             dirty = true;
             match event {
                 SessionEvent::Wakeup => wakeups += 1,
-                SessionEvent::Title(title) => {
-                    eprintln!("[coast] title: {title}");
-                    self.title = SharedString::new(title);
-                }
-                SessionEvent::ResetTitle => self.title = SharedString::new_static("Coast"),
+                // The tab label is the cwd, not the shell-set title.
+                SessionEvent::Title(_) | SessionEvent::ResetTitle => {}
                 SessionEvent::Bell => eprintln!("[coast] bell"),
                 SessionEvent::ClipboardStore(_) => {}
                 SessionEvent::Exited(code) => {
@@ -274,20 +280,22 @@ impl TerminalView {
             let text = self.session.screen_text();
             eprintln!("[coast] first grid output:\n{text}");
         }
-        // Blink animation and the cwd poll (a syscall) only matter for the
-        // tab actually on screen — a backgrounded tab has neither a
-        // visible cursor nor a visible breadcrumb, so there's nothing to
-        // redraw or look up for it. The event drain above still always
-        // runs, though: that's what keeps `exited` accurate (the reaper
-        // depends on it) and stops the session's event channel from
-        // growing unbounded under heavy background output.
+        // Blink animation and the cwd poll (a syscall, used for both the
+        // tab label and the breadcrumb) only run for the tab actually on
+        // screen — a backgrounded tab's label simply shows whatever
+        // directory it was in when last viewed, refreshing the moment you
+        // switch back to it, rather than polling every tab's cwd on a
+        // timer. The event drain above still always runs, though: that's
+        // what keeps `exited` accurate (the reaper depends on it) and
+        // stops the session's event channel from growing unbounded under
+        // heavy background output.
         if self.is_active {
             if self.cursor_blink && self.last_blink.elapsed() >= BLINK_INTERVAL {
                 self.last_blink = Instant::now();
                 self.cursor_visible = !self.cursor_visible;
                 dirty = true;
             }
-            if self.show_breadcrumb && self.last_cwd_check.elapsed() >= CWD_POLL_INTERVAL {
+            if self.last_cwd_check.elapsed() >= CWD_POLL_INTERVAL {
                 self.last_cwd_check = Instant::now();
                 let dir = self.session.current_dir();
                 if dir != self.current_dir {

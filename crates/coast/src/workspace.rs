@@ -33,7 +33,7 @@ enum TabKind {
 impl TabKind {
     fn title(&self, cx: &App) -> String {
         match self {
-            TabKind::Terminal(view) => view.read(cx).title().to_string(),
+            TabKind::Terminal(view) => view.read(cx).title(),
             TabKind::Settings(_) => "Settings".to_string(),
         }
     }
