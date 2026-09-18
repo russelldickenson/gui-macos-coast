@@ -128,6 +128,10 @@ impl Session {
             cmd.arg(arg);
         }
         cmd.env("TERM", "xterm-256color");
+        // Advertise 24-bit color support so apps that gate their palette on
+        // this (tig, vim, tmux, ...) use their full truecolor styling
+        // instead of falling back to a more conservative one.
+        cmd.env("COLORTERM", "truecolor");
         // Login shells already cd to $HOME; be explicit anyway.
         if let Some(home) = std::env::var_os("HOME") {
             cmd.cwd(home);
