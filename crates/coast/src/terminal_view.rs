@@ -14,12 +14,12 @@ use gpui::{
     anchored, deferred, fill, point, prelude::*, px, relative, svg, App, Bounds, Context, Element,
     ElementId, Entity, EventEmitter, FocusHandle, Focusable, Font, FontStyle, FontWeight,
     GlobalElementId, Hsla, InspectorElementId, IntoElement, KeyDownEvent, Keystroke, LayoutId,
-    MouseButton, PaintQuad, Pixels, Point, ScrollWheelEvent, ShapedLine, SharedString, Size,
+    ClipboardItem, MouseButton, MouseDownEvent, MouseMoveEvent, PaintQuad, Pixels, Point, ScrollWheelEvent, ShapedLine, SharedString, Size,
     StrikethroughStyle, Style, TextRun, UnderlineStyle, Window,
 };
 
 use crate::colors;
-use terminal_core::{Session, SessionEvent};
+use terminal_core::{SelectionKind, Session, SessionEvent};
 
 const BLINK_INTERVAL: Duration = Duration::from_millis(530);
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
@@ -113,6 +113,13 @@ pub struct TerminalView {
     /// render while the dropdown stays open (e.g. every cursor-blink
     /// tick) — only when the directory it's for actually changes.
     subdirs_cache: Option<(std::path::PathBuf, Vec<String>)>,
+    /// Top-left of the character grid (inside the padding) as of the last
+    /// paint, for mapping mouse positions to cells.
+    grid_origin: Point<Pixels>,
+    /// Whether a left-button drag-selection is in progress.
+    selecting: bool,
+    /// Window position of the open right-click menu, if any.
+    context_menu: Option<Point<Pixels>>,
 }
 
 impl TerminalView {
@@ -127,6 +134,7 @@ impl TerminalView {
         breadcrumb_theme: coast_themes::BreadcrumbTheme,
         cx: &mut Context<Self>,
     ) -> Self {
+        let session_dir = session.current_dir();
         let mut this = Self {
             session,
             font_family,
@@ -150,12 +158,15 @@ impl TerminalView {
             scrollbar_hovered: false,
             show_breadcrumb,
             breadcrumb_theme,
-            current_dir: None,
+            current_dir: session_dir,
             last_cwd_check: Instant::now() - CWD_POLL_INTERVAL,
             breadcrumb_open: false,
             content_width: px(2000.),
             is_active: true,
             subdirs_cache: None,
+            grid_origin: point(px(0.), px(0.)),
+            selecting: false,
+            context_menu: None,
         };
         this.spawn_poll(cx);
         this
@@ -239,6 +250,7 @@ impl TerminalView {
         // Typing while scrolled back into history jumps back to the live
         // output, matching every other terminal.
         self.session.scroll_to_bottom();
+        self.session.clear_selection();
         let app_cursor_keys = self.session.application_cursor_keys();
         match crate::keys::keystroke_to_bytes(ks, app_cursor_keys) {
             Some(bytes) => {
@@ -247,6 +259,62 @@ impl TerminalView {
                 }
             }
             None => eprintln!("[coast] keystroke mapped to nothing"),
+        }
+    }
+
+    /// Viewport cell under `position` (window coordinates) and whether the
+    /// pointer is in that cell's right half. Clamped to the grid.
+    fn cell_at(&self, position: Point<Pixels>) -> (usize, usize, bool) {
+        let x = ((position.x - self.grid_origin.x) / self.cell_size.width).max(0.);
+        let y = ((position.y - self.grid_origin.y) / self.cell_size.height).max(0.);
+        (x as usize, y as usize, x.fract() >= 0.5)
+    }
+
+    fn begin_selection(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        let (col, row, right) = self.cell_at(event.position);
+        let kind = match event.click_count {
+            0 | 1 => SelectionKind::Simple,
+            2 => SelectionKind::Word,
+            _ => SelectionKind::Line,
+        };
+        self.session.start_selection(kind, col, row, right);
+        self.selecting = true;
+        cx.notify();
+    }
+
+    fn drag_selection(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        if !self.selecting {
+            return;
+        }
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.selecting = false;
+            return;
+        }
+        let (col, row, right) = self.cell_at(event.position);
+        self.session.update_selection(col, row, right);
+        cx.notify();
+    }
+
+    fn paste_clipboard(&mut self, cx: &mut Context<Self>) {
+        if self.exited.is_some() {
+            return;
+        }
+        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+            if text.is_empty() {
+                return;
+            }
+            self.session.scroll_to_bottom();
+            self.session.clear_selection();
+            if let Err(err) = self.session.paste(&text) {
+                eprintln!("[coast] paste failed: {err:#}");
+            }
+            cx.notify();
+        }
+    }
+
+    fn copy_selection(&self, cx: &mut Context<Self>) {
+        if let Some(text) = self.session.selection_text() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
     }
 
@@ -300,6 +368,12 @@ impl TerminalView {
         // what keeps `exited` accurate (the reaper depends on it) and
         // stops the session's event channel from growing unbounded under
         // heavy background output.
+        // A backgrounded tab with no label yet (cwd unresolved at spawn)
+        // still gets polled until it has one.
+        if !self.is_active && self.current_dir.is_none() {
+            self.current_dir = self.session.current_dir();
+            dirty |= self.current_dir.is_some();
+        }
         if self.is_active {
             if self.cursor_blink && self.last_blink.elapsed() >= BLINK_INTERVAL {
                 self.last_blink = Instant::now();
@@ -390,6 +464,79 @@ impl Focusable for TerminalView {
     }
 }
 
+impl TerminalView {
+    /// The right-click menu: "Copy" when text is selected, "Paste" when the
+    /// clipboard holds text.
+    fn render_context_menu(&self, position: Point<Pixels>, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = &self.breadcrumb_theme;
+        let (bg, border, hover, text) = (
+            colors::hsla(theme.pill),
+            colors::hsla(theme.pill_border),
+            colors::hsla(theme.pill_hover),
+            colors::hsla(theme.text),
+        );
+        let can_copy = self.session.selection_text().is_some();
+        let can_paste = cx.read_from_clipboard().is_some_and(|i| i.text().is_some());
+
+        let item = |id: &'static str, label: &'static str, first: bool| {
+            let mut el = gpui::div()
+                .id(id)
+                .px_3()
+                .py_1()
+                .text_sm()
+                .text_color(text)
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover))
+                .child(label);
+            if !first {
+                el = el.border_t_1().border_color(border);
+            }
+            el
+        };
+
+        let mut list = gpui::div()
+            .id("terminal-context-menu")
+            .min_w(px(120.))
+            .flex()
+            .flex_col()
+            .rounded_md()
+            .bg(bg)
+            .border_1()
+            .border_color(border)
+            .shadow_md()
+            .occlude()
+            .on_mouse_down_out(cx.listener(|view, _, _window, cx| {
+                view.context_menu = None;
+                cx.notify();
+            }));
+        if can_copy {
+            list = list.child(item("ctx-copy", "Copy", true).on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, _, _window, cx| {
+                    view.copy_selection(cx);
+                    view.context_menu = None;
+                    cx.notify();
+                }),
+            ));
+        }
+        if can_paste {
+            list = list.child(item("ctx-paste", "Paste", !can_copy).on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, _, _window, cx| {
+                    view.context_menu = None;
+                    view.paste_clipboard(cx);
+                }),
+            ));
+        }
+        deferred(
+            anchored()
+                .position(position)
+                .snap_to_window_with_margin(px(8.))
+                .child(list),
+        )
+    }
+}
+
 impl Render for TerminalView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let line_height = self.cell_size.height.max(px(1.));
@@ -400,6 +547,37 @@ impl Render for TerminalView {
             .on_key_down(cx.listener(|view, event: &KeyDownEvent, _window, _cx| {
                 view.handle_keystroke(&event.keystroke);
             }))
+            .on_action(cx.listener(|view, _: &crate::Copy, _window, cx| {
+                view.copy_selection(cx);
+            }))
+            .on_action(cx.listener(|view, _: &crate::Paste, _window, cx| {
+                view.paste_clipboard(cx);
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, event: &MouseDownEvent, _window, cx| {
+                    view.context_menu = None;
+                    view.begin_selection(event, cx);
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|view, event: &MouseDownEvent, _window, cx| {
+                    let can_copy = view.session.selection_text().is_some();
+                    let can_paste = cx.read_from_clipboard().is_some_and(|i| i.text().is_some());
+                    view.context_menu = (can_copy || can_paste).then_some(event.position);
+                    cx.notify();
+                }),
+            )
+            .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _window, cx| {
+                view.drag_selection(event, cx);
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|view, _: &gpui::MouseUpEvent, _window, _cx| {
+                    view.selecting = false;
+                }),
+            )
             .on_scroll_wheel(cx.listener(move |view, event: &ScrollWheelEvent, _window, cx| {
                 let delta = event.delta.pixel_delta(line_height).y;
                 let lines = (delta / line_height).round() as i32;
@@ -412,12 +590,14 @@ impl Render for TerminalView {
 
         let show_scrollbar = self.scrollbar_visible || self.scrollbar_hovered;
 
+        let menu = self.context_menu.map(|pos| self.render_context_menu(pos, cx));
         let terminal_area = gpui::div()
             .relative()
             .flex_1()
             .w_full()
             .child(content)
-            .child(scrollbar(&self.session, show_scrollbar, cx));
+            .child(scrollbar(&self.session, show_scrollbar, cx))
+            .children(menu);
 
         let breadcrumb_element = if self.show_breadcrumb {
             self.current_dir.clone().map(|dir| {
@@ -847,6 +1027,7 @@ struct CellSnapshot {
     fg: TermColor,
     bg: TermColor,
     flags: Flags,
+    selected: bool,
 }
 
 struct TerminalElement {
@@ -956,6 +1137,12 @@ impl Element for TerminalElement {
             },
         };
 
+        if self.view.read(cx).grid_origin != content_bounds.origin {
+            self.view.update(cx, |view, _| {
+                view.grid_origin = content_bounds.origin;
+            });
+        }
+
         // Fit the grid to the available (padded) bounds.
         let cols = ((content_bounds.size.width / cell.width).floor() as u16).max(2);
         let rows = ((content_bounds.size.height / cell.height).floor() as u16).max(1);
@@ -977,6 +1164,7 @@ impl Element for TerminalElement {
             let offset = grid.display_offset() as i32;
             let mut snapshots: Vec<RowSnapshot> = Vec::new();
             let mut current_line: Option<i32> = None;
+            let selection = term.renderable_content().selection;
             for indexed in grid.display_iter() {
                 let line = indexed.point.line.0;
                 if current_line != Some(line) {
@@ -989,6 +1177,7 @@ impl Element for TerminalElement {
                     fg: cell.fg,
                     bg: cell.bg,
                     flags: cell.flags,
+                    selected: selection.is_some_and(|range| range.contains(indexed.point)),
                 });
             }
             let content = term.renderable_content();
@@ -1202,6 +1391,11 @@ fn cell_run(
     if inverse {
         std::mem::swap(&mut fg, &mut bg);
     }
+    if snap.selected && !is_cursor {
+        // Keep the glyph's own foreground; only the background changes.
+        fg = resolve_color(snap.fg, theme);
+        bg = theme.selection_background;
+    }
     if is_cursor {
         fg = theme.cursor_text;
         bg = theme.cursor;
@@ -1216,7 +1410,7 @@ fn cell_run(
     }
 
     let fg_hsla = colors::hsla(fg);
-    let background_color = if !inverse && bg == theme.background && !is_cursor {
+    let background_color = if !inverse && !snap.selected && bg == theme.background && !is_cursor {
         None
     } else {
         Some(colors::hsla(bg))

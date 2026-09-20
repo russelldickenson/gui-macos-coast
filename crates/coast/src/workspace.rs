@@ -514,7 +514,8 @@ impl Render for Workspace {
                     .gap_2()
                     .h(px(TAB_HEIGHT))
                     .w(px(TAB_WIDTH))
-                    .px_4()
+                    .pl_4()
+                    .pr_2()
                     .rounded_t_md()
                     .bg(if is_active {
                         chrome_active_tab

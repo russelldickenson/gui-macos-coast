@@ -10,6 +10,8 @@ use std::time::Duration;
 use alacritty_terminal::{
     event::{Event, EventListener},
     grid::{Dimensions, Scroll},
+    index::{Column, Line, Point, Side},
+    selection::{Selection, SelectionType},
     term::{test::TermSize, Config, TermMode},
     vte::ansi::{CursorShape, CursorStyle, Processor},
     Term,
@@ -364,6 +366,61 @@ impl Session {
         self.with_term(|term| term.mode().contains(TermMode::APP_CURSOR))
     }
 
+    /// Send pasted text to the child, wrapped in bracketed-paste markers
+    /// when the app asked for them (so shells/editors treat it as literal
+    /// input rather than typed keystrokes).
+    pub fn paste(&self, text: &str) -> anyhow::Result<()> {
+        let bracketed = self.with_term(|term| term.mode().contains(TermMode::BRACKETED_PASTE));
+        if bracketed {
+            // Strip ESC so pasted text can't end the bracket early.
+            let text = text.replace('\x1b', "");
+            self.write(format!("\x1b[200~{text}\x1b[201~").as_bytes())
+        } else {
+            // Terminals expect CR for line breaks in unbracketed pastes.
+            self.write(text.replace("\r\n", "\r").replace('\n', "\r").as_bytes())
+        }
+    }
+
+    /// Begin a selection at viewport cell (`col`, `row`). `right_half` is
+    /// whether the pointer was in the cell's right half, so a drag includes
+    /// or excludes the boundary cell like other terminals do.
+    pub fn start_selection(&self, kind: SelectionKind, col: usize, row: usize, right_half: bool) {
+        if let Ok(mut term) = self.term.lock() {
+            let point = viewport_point(&term, col, row);
+            let ty = match kind {
+                SelectionKind::Simple => SelectionType::Simple,
+                SelectionKind::Word => SelectionType::Semantic,
+                SelectionKind::Line => SelectionType::Lines,
+            };
+            term.selection = Some(Selection::new(ty, point, side(right_half)));
+        }
+    }
+
+    /// Extend the active selection to viewport cell (`col`, `row`).
+    pub fn update_selection(&self, col: usize, row: usize, right_half: bool) {
+        if let Ok(mut term) = self.term.lock() {
+            let point = viewport_point(&term, col, row);
+            if let Some(selection) = term.selection.as_mut() {
+                selection.update(point, side(right_half));
+            }
+        }
+    }
+
+    pub fn clear_selection(&self) {
+        if let Ok(mut term) = self.term.lock() {
+            if term.selection.is_some() {
+                term.selection = None;
+            }
+        }
+    }
+
+    /// The selected text, if any (`None` when nothing, or only an empty
+    /// range, is selected).
+    pub fn selection_text(&self) -> Option<String> {
+        self.with_term(|term| term.selection_to_string())
+            .filter(|text| !text.is_empty())
+    }
+
     /// How far back the viewport is scrolled, and how many lines of
     /// scrollback history are available — for driving a scrollbar.
     pub fn scroll_position(&self) -> (usize, usize) {
@@ -372,6 +429,36 @@ impl Session {
             (grid.display_offset(), grid.history_size())
         })
     }
+}
+
+/// How a selection grows as it's dragged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionKind {
+    /// Character by character.
+    Simple,
+    /// Whole words (double-click).
+    Word,
+    /// Whole lines (triple-click).
+    Line,
+}
+
+fn side(right_half: bool) -> Side {
+    if right_half {
+        Side::Right
+    } else {
+        Side::Left
+    }
+}
+
+/// Map a viewport cell to a grid point, accounting for scrollback offset.
+fn viewport_point<T>(term: &Term<T>, col: usize, row: usize) -> Point {
+    let grid = term.grid();
+    let col = col.min(grid.columns().saturating_sub(1));
+    let row = row.min(grid.screen_lines().saturating_sub(1));
+    Point::new(
+        Line(row as i32 - grid.display_offset() as i32),
+        Column(col),
+    )
 }
 
 impl Drop for Session {
