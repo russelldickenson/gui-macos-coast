@@ -107,6 +107,7 @@ fn app_menus() -> Vec<Menu> {
 }
 
 fn main() {
+    settings_view::register_bundled_system_fonts();
     Application::new().with_assets(Assets).run(|cx: &mut App| {
         cx.bind_keys([
             KeyBinding::new("cmd-,", OpenSettings, None),

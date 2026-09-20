@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 gpui = { version = "0.2.2", default-features = false, features = ["font-kit"] }
 alacritty_terminal = "0.26"
+core-foundation = "0.10"
 core-text = "21"
 terminal-core = { path = "../terminal-core" }
 coast-themes = { path = "../themes" }

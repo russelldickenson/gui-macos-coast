@@ -168,6 +168,50 @@ fn edit_text(buf: &mut String, ks: &Keystroke) -> bool {
     false
 }
 
+/// Register SF Mono for this process. macOS doesn't install it system-wide;
+/// it only ships inside Terminal.app's bundle, so CoreText doesn't list it
+/// until we register those files ourselves. Silently does nothing if the
+/// folder is missing (path is a system-internal detail).
+pub fn register_bundled_system_fonts() {
+    use core_foundation::base::TCFType;
+    use core_foundation::url::CFURL;
+    use std::os::raw::c_void;
+
+    extern "C" {
+        fn CTFontManagerRegisterFontsForURL(
+            url: *const c_void,
+            scope: u32,
+            error: *mut *const c_void,
+        ) -> bool;
+    }
+    const SCOPE_PROCESS: u32 = 1;
+    const DIR: &str = "/System/Applications/Utilities/Terminal.app/Contents/Resources/Fonts";
+
+    let Ok(entries) = std::fs::read_dir(DIR) else {
+        return;
+    };
+    for path in entries.flatten().map(|e| e.path()) {
+        if !path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("SF-Mono"))
+        {
+            continue;
+        }
+        if let Some(url) = CFURL::from_path(&path, false) {
+            // Best effort: a failure (e.g. already registered) just leaves
+            // that face out.
+            unsafe {
+                CTFontManagerRegisterFontsForURL(
+                    url.as_concrete_TypeRef() as *const c_void,
+                    SCOPE_PROCESS,
+                    std::ptr::null_mut(),
+                );
+            }
+        }
+    }
+}
+
 /// Every monospace font family actually installed on the system, per
 /// CoreText's own `kCTFontMonoSpaceTrait` (the same trait Font Book uses) —
 /// not a curated guess list.
