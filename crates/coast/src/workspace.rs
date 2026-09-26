@@ -88,6 +88,9 @@ pub struct Workspace {
     /// immediately regardless, this just avoids a synchronous file write
     /// per keystroke while e.g. typing in a settings text field.
     save_epoch: u64,
+    /// Scroll position of the tab strip, so it can be scrolled horizontally
+    /// when there are more tabs than fit the window's width.
+    tab_scroll_handle: ScrollHandle,
 }
 
 impl Workspace {
@@ -108,6 +111,7 @@ impl Workspace {
             pending_close: None,
             close_confirm_focus: cx.focus_handle(),
             save_epoch: 0,
+            tab_scroll_handle: ScrollHandle::new(),
         };
         this.spawn_reaper(cx);
         this
@@ -357,6 +361,10 @@ impl Workspace {
                 view.update(cx, |view, cx| view.set_active(ix == self.active, cx));
             }
         }
+        // Each tab pushes two children onto the tab strip (the tab itself,
+        // then its trailing divider), so the active tab's own child index
+        // there is always double its index in `self.tabs`.
+        self.tab_scroll_handle.scroll_to_item(self.active * 2);
     }
 
     /// Cycle to the next tab, wrapping around.
@@ -501,10 +509,33 @@ impl Render for Workspace {
                     }),
             );
 
+        // The tabs live in their own scrollable strip (separate from `bar`)
+        // so that once there are more tabs than fit the window's width, the
+        // overflow can be reached with the mouse wheel / trackpad instead of
+        // rendering past the window's edge — `+` and the settings gear stay
+        // pinned outside this strip. `min_w_0()` lets it shrink below its
+        // content's natural width, which `overflow_x_scroll()` needs in
+        // order to clip rather than just expand `bar`.
+        let mut tabs_row = div()
+            .id("tab-strip")
+            .flex()
+            .flex_row()
+            .items_end()
+            .h(px(BAR_HEIGHT))
+            // Grow=0 so this strip doesn't compete for space with the
+            // trailing drag-spacer below when tabs fit comfortably —
+            // shrink=1 (and `min_w_0`) lets it be clamped to the space
+            // actually available once tabs overflow, so `overflow_x_scroll`
+            // clips instead of pushing everything else out of the bar.
+            .flex_initial()
+            .min_w_0()
+            .overflow_x_scroll()
+            .track_scroll(&self.tab_scroll_handle);
+
         for (ix, tab) in self.tabs.iter().enumerate() {
             let title = SharedString::new(tab.kind.title(cx));
             let is_active = ix == active;
-            bar = bar.child(
+            tabs_row = tabs_row.child(
                 div()
                     .flex()
                     .flex_none()
@@ -575,7 +606,7 @@ impl Render for Workspace {
             // space, like the tab's own border above, so switching which
             // tab is active never shifts any tab's position.
             let next_is_active = active == ix + 1;
-            bar = bar.child(
+            tabs_row = tabs_row.child(
                 div().h(px(TAB_HEIGHT)).flex().items_center().child(
                     div().w(px(1.)).h(px(TAB_HEIGHT - 16.)).bg(
                         if is_active || next_is_active {
@@ -587,6 +618,64 @@ impl Render for Workspace {
                 ),
             );
         }
+
+        // Edge fades/chevrons hinting that more tabs are scrolled off to
+        // that side — siblings of `tabs_row` (not children of it) so they
+        // stay put over the strip instead of scrolling away with it.
+        const EDGE_WIDTH: f32 = 24.;
+        let scroll_offset = self.tab_scroll_handle.offset();
+        let max_scroll = self.tab_scroll_handle.max_offset();
+        let can_scroll_left = scroll_offset.x < px(0.);
+        let can_scroll_right =
+            max_scroll.width > px(0.) && scroll_offset.x > -max_scroll.width;
+
+        let mut tabs_viewport = div()
+            .relative()
+            .flex_initial()
+            .min_w_0()
+            .h(px(BAR_HEIGHT))
+            .child(tabs_row);
+
+        let edge_fade = |chrome_bar: Hsla| Hsla {
+            a: chrome_bar.a * 0.9,
+            ..chrome_bar
+        };
+        if can_scroll_left {
+            tabs_viewport = tabs_viewport.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .h(px(BAR_HEIGHT))
+                    .w(px(EDGE_WIDTH))
+                    .flex()
+                    .items_center()
+                    .justify_start()
+                    .bg(edge_fade(chrome_bar))
+                    .text_color(chrome_inactive_tab_text)
+                    .text_size(px(12.))
+                    .child("‹"),
+            );
+        }
+        if can_scroll_right {
+            tabs_viewport = tabs_viewport.child(
+                div()
+                    .absolute()
+                    .right_0()
+                    .top_0()
+                    .h(px(BAR_HEIGHT))
+                    .w(px(EDGE_WIDTH))
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .bg(edge_fade(chrome_bar))
+                    .text_color(chrome_inactive_tab_text)
+                    .text_size(px(12.))
+                    .child("›"),
+            );
+        }
+
+        bar = bar.child(tabs_viewport);
 
         bar = bar
             .child(
