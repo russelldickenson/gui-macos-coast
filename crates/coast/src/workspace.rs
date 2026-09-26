@@ -325,7 +325,17 @@ impl Workspace {
         self.active = self.active.min(self.tabs.len() - 1);
         self.sync_active_terminal(cx);
         cx.notify();
-        self.focus_active(window, cx);
+        // Deferred to next frame: the newly-active tab's terminal isn't in
+        // the rendered dispatch tree yet (it wasn't painted last frame,
+        // since only the active tab renders), so focusing it immediately
+        // targets a handle the window can't yet route keys to — the tab
+        // looks selected but stays deaf to the keyboard until something
+        // else (e.g. a click) forces a fresh focus. Waiting for the next
+        // frame lets the new tab's view actually mount first.
+        let this = cx.entity();
+        window.on_next_frame(move |window, cx| {
+            this.update(cx, |this, cx| this.focus_active(window, cx));
+        });
     }
 
     fn confirm_pending_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
