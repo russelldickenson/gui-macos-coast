@@ -201,6 +201,10 @@ impl Workspace {
         });
         cx.subscribe(&view, |workspace, _view, event: &crate::terminal_view::ResizedEvent, cx| {
             workspace.show_resize_hud(event.cols, event.rows, cx);
+            // See `scroll_active_tab_into_view`'s doc comment: this is the
+            // layout-has-settled signal that corrects any tab-strip scroll
+            // adjustment made before the window reached its final size.
+            workspace.scroll_active_tab_into_view();
         })
         .detach();
         self.tabs.push(Tab {
@@ -210,6 +214,7 @@ impl Workspace {
         self.sync_active_terminal(cx);
         cx.notify();
         self.focus_active(window, cx);
+        self.scroll_active_tab_into_view();
     }
 
     /// Each terminal tab's current directory, for persistence at quit.
@@ -278,6 +283,7 @@ impl Workspace {
         self.sync_active_terminal(cx);
         cx.notify();
         self.focus_active(window, cx);
+        self.scroll_active_tab_into_view();
     }
 
     /// Close a tab, asking for confirmation first when doing so would lose
@@ -334,7 +340,10 @@ impl Workspace {
         // frame lets the new tab's view actually mount first.
         let this = cx.entity();
         window.on_next_frame(move |window, cx| {
-            this.update(cx, |this, cx| this.focus_active(window, cx));
+            this.update(cx, |this, cx| {
+                this.focus_active(window, cx);
+                this.scroll_active_tab_into_view();
+            });
         });
     }
 
@@ -359,6 +368,7 @@ impl Workspace {
         self.sync_active_terminal(cx);
         cx.notify();
         self.focus_active(window, cx);
+        self.scroll_active_tab_into_view();
     }
 
     /// Tell every terminal tab whether it's the one currently shown, so
@@ -371,6 +381,21 @@ impl Workspace {
                 view.update(cx, |view, cx| view.set_active(ix == self.active, cx));
             }
         }
+    }
+
+    /// Scroll the tab strip so the active tab is fully visible.
+    ///
+    /// Called again (beyond the obvious spots — `activate`, `add_tab`, …)
+    /// from the per-tab resize subscription below: at startup the window
+    /// isn't necessarily at its final size yet when the initial tabs are
+    /// added and this first runs, so an adjustment made then can end up
+    /// sized against bounds that are about to change, leaving the strip
+    /// scrolled further than the tabs actually need once the window
+    /// settles. The active terminal's own resize event (fired once the PTY
+    /// is resized to the window's real, settled size — see `[coast] resize`
+    /// in the logs) is a reliable signal that layout has caught up, so
+    /// re-running the scroll then corrects any such stale adjustment.
+    fn scroll_active_tab_into_view(&self) {
         // Each tab pushes two children onto the tab strip (the tab itself,
         // then its trailing divider), so the active tab's own child index
         // there is always double its index in `self.tabs`.
@@ -583,7 +608,10 @@ impl Render for Workspace {
                     .child(div().flex_1().truncate().child(title))
                     .child(
                         div()
-                            .px_1()
+                            .size(px(20.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
                             .rounded_md()
                             .text_color(if is_active {
                                 chrome_active_tab_text
@@ -593,7 +621,7 @@ impl Render for Workspace {
                             .hover(|s| {
                                 s.bg(chrome_hover).text_color(chrome_active_tab_text)
                             })
-                            .child("×")
+                            .child(div().relative().top(px(-1.)).child("×"))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this: &mut Workspace, _, window, cx| {
@@ -635,9 +663,22 @@ impl Render for Workspace {
         const EDGE_WIDTH: f32 = 24.;
         let scroll_offset = self.tab_scroll_handle.offset();
         let max_scroll = self.tab_scroll_handle.max_offset();
-        let can_scroll_left = scroll_offset.x < px(0.);
-        let can_scroll_right =
-            max_scroll.width > px(0.) && scroll_offset.x > -max_scroll.width;
+        // Flex layout leaves sub-pixel rounding noise in the offset/max even
+        // when the tabs fully fit (e.g. -0.004px rather than a clean 0), so
+        // comparing against an exact 0 flagged "overflow" for gaps you'd
+        // never actually notice, permanently showing a chevron over tabs
+        // that had nothing hidden. A half-pixel threshold ignores that
+        // noise while still catching any real overflow.
+        const OVERFLOW_EPSILON: f32 = 0.5;
+        // `scroll_to_item` can briefly leave a negative offset behind while
+        // the strip is being laid out after restoring tabs. That offset does
+        // not mean a tab is hidden if the settled content has no horizontal
+        // overflow, so require actual overflow for *both* edge indicators.
+        let has_horizontal_overflow = max_scroll.width > px(OVERFLOW_EPSILON);
+        let can_scroll_left =
+            has_horizontal_overflow && scroll_offset.x < px(-OVERFLOW_EPSILON);
+        let can_scroll_right = has_horizontal_overflow
+            && scroll_offset.x > -max_scroll.width + px(OVERFLOW_EPSILON);
 
         let mut tabs_viewport = div()
             .relative()
