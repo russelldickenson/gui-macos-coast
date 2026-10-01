@@ -87,6 +87,9 @@ pub struct TerminalView {
     /// scroll can't hide the bar out from under a newer one.
     scrollbar_epoch: u64,
     scrollbar_hovered: bool,
+    /// Sub-line wheel/trackpad pixels not yet converted to whole lines, so
+    /// slow swipes accumulate instead of rounding to nothing.
+    scroll_remainder: f32,
     /// Whether the directory breadcrumb bar is shown above the grid.
     show_breadcrumb: bool,
     breadcrumb_theme: coast_themes::BreadcrumbTheme,
@@ -156,6 +159,7 @@ impl TerminalView {
             scrollbar_visible: false,
             scrollbar_epoch: 0,
             scrollbar_hovered: false,
+            scroll_remainder: 0.0,
             show_breadcrumb,
             breadcrumb_theme,
             current_dir: session_dir,
@@ -579,9 +583,15 @@ impl Render for TerminalView {
                 }),
             )
             .on_scroll_wheel(cx.listener(move |view, event: &ScrollWheelEvent, _window, cx| {
-                let delta = event.delta.pixel_delta(line_height).y;
-                let lines = (delta / line_height).round() as i32;
+                let delta = f32::from(event.delta.pixel_delta(line_height).y);
+                if delta * view.scroll_remainder < 0.0 {
+                    view.scroll_remainder = 0.0;
+                }
+                view.scroll_remainder += delta;
+                let lh = f32::from(line_height);
+                let lines = (view.scroll_remainder / lh).trunc() as i32;
                 if lines != 0 {
+                    view.scroll_remainder -= lines as f32 * lh;
                     view.session.scroll_lines(lines);
                     view.flash_scrollbar(cx);
                 }
