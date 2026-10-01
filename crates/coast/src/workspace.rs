@@ -54,6 +54,8 @@ impl TabKind {
 }
 
 pub struct Tab {
+    /// Stable identity, so the MRU history survives index shifts.
+    id: u64,
     kind: TabKind,
 }
 
@@ -66,6 +68,10 @@ struct PendingClose {
 pub struct Workspace {
     tabs: Vec<Tab>,
     active: usize,
+    next_tab_id: u64,
+    /// Tab ids in activation order, most recently active last. Used to pick
+    /// the replacement when the active tab closes.
+    history: Vec<u64>,
     settings: coast_settings::Settings,
     theme: coast_themes::Theme,
     chrome: coast_themes::ChromeTheme,
@@ -102,6 +108,8 @@ impl Workspace {
         let mut this = Self {
             tabs: Vec::new(),
             active: 0,
+            next_tab_id: 0,
+            history: Vec::new(),
             settings,
             theme,
             chrome,
@@ -132,6 +140,7 @@ impl Workspace {
                         .iter()
                         .filter(|tab| matches!(tab.kind, TabKind::Terminal(_)))
                         .count();
+                    let prev_active = workspace.tabs.get(workspace.active).map(|t| t.id);
                     workspace.tabs.retain(|tab| tab.kind.exited(cx).is_none());
                     let terminals_after = workspace
                         .tabs
@@ -147,10 +156,19 @@ impl Workspace {
                         return true;
                     }
                     if workspace.tabs.len() != before {
-                        workspace.active =
-                            workspace.active.min(workspace.tabs.len().saturating_sub(1));
+                        workspace.reselect_after_removal(prev_active);
                         workspace.sync_active_terminal(cx);
                         cx.notify();
+                        // Deferred so it runs after this update releases the
+                        // workspace (the window's root view).
+                        let this = cx.entity();
+                        cx.defer(move |cx| {
+                            if let Some(window) = cx.active_window() {
+                                let _ = window.update(cx, |_, window, cx| {
+                                    this.update(cx, |this, cx| this.focus_active(window, cx));
+                                });
+                            }
+                        });
                     }
                     false
                 })
@@ -207,10 +225,13 @@ impl Workspace {
             workspace.scroll_active_tab_into_view();
         })
         .detach();
+        let id = self.alloc_tab_id();
         self.tabs.push(Tab {
+            id,
             kind: TabKind::Terminal(view),
         });
         self.active = self.tabs.len() - 1;
+        self.touch_history();
         self.sync_active_terminal(cx);
         cx.notify();
         self.focus_active(window, cx);
@@ -276,10 +297,13 @@ impl Workspace {
         let workspace = cx.entity();
         let settings = self.settings.clone();
         let view = cx.new(|cx| SettingsView::new(workspace, settings, cx));
+        let id = self.alloc_tab_id();
         self.tabs.push(Tab {
+            id,
             kind: TabKind::Settings(view),
         });
         self.active = self.tabs.len() - 1;
+        self.touch_history();
         self.sync_active_terminal(cx);
         cx.notify();
         self.focus_active(window, cx);
@@ -323,12 +347,13 @@ impl Workspace {
         if ix >= self.tabs.len() {
             return;
         }
+        let prev_active = self.tabs.get(self.active).map(|t| t.id);
         self.tabs.remove(ix);
         if self.tabs.is_empty() {
             cx.quit();
             return;
         }
-        self.active = self.active.min(self.tabs.len() - 1);
+        self.reselect_after_removal(prev_active);
         self.sync_active_terminal(cx);
         cx.notify();
         // Deferred to next frame: the newly-active tab's terminal isn't in
@@ -365,10 +390,38 @@ impl Workspace {
             return;
         }
         self.active = ix;
+        self.touch_history();
         self.sync_active_terminal(cx);
         cx.notify();
         self.focus_active(window, cx);
         self.scroll_active_tab_into_view();
+    }
+
+    fn alloc_tab_id(&mut self) -> u64 {
+        let id = self.next_tab_id;
+        self.next_tab_id += 1;
+        id
+    }
+
+    /// Record the active tab as most recently used.
+    fn touch_history(&mut self) {
+        if let Some(id) = self.tabs.get(self.active).map(|t| t.id) {
+            self.history.retain(|&h| h != id);
+            self.history.push(id);
+        }
+    }
+
+    /// After tabs were removed: keep the previously active tab if it
+    /// survived, else fall back to the most recently active remaining tab.
+    fn reselect_after_removal(&mut self, prev_active: Option<u64>) {
+        let tabs = &self.tabs;
+        self.history.retain(|id| tabs.iter().any(|t| t.id == *id));
+        let find = |id: u64| tabs.iter().position(|t| t.id == id);
+        self.active = prev_active
+            .and_then(find)
+            .or_else(|| self.history.last().copied().and_then(find))
+            .unwrap_or_else(|| self.active.min(tabs.len().saturating_sub(1)));
+        self.touch_history();
     }
 
     /// Tell every terminal tab whether it's the one currently shown, so
