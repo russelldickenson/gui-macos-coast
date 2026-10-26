@@ -67,13 +67,13 @@ enum FocusSlot {
     Theme,
     Import,
     Chrome,
+    UiZoom,
     CursorShape,
     CursorBlink,
     CursorColor,
     FontFamily,
     FontSize,
     LineSpacing,
-    UiZoom,
     Cols,
     Rows,
     Scrollback,
@@ -87,13 +87,13 @@ impl FocusSlot {
         FocusSlot::Theme,
         FocusSlot::Import,
         FocusSlot::Chrome,
+        FocusSlot::UiZoom,
         FocusSlot::CursorShape,
         FocusSlot::CursorBlink,
         FocusSlot::CursorColor,
         FocusSlot::FontFamily,
         FocusSlot::FontSize,
         FocusSlot::LineSpacing,
-        FocusSlot::UiZoom,
         FocusSlot::Cols,
         FocusSlot::Rows,
         FocusSlot::Scrollback,
@@ -560,6 +560,12 @@ impl Render for SettingsView {
                 )
                 .into_any_element(),
             ),
+            setting_row(
+                "UI zoom",
+                Some("Scales the tabs, directory breadcrumb and this page."),
+                ui_zoom_dropdown(self, focused_field(&self.ui_zoom_focus), cx)
+                    .into_any_element(),
+            ),
         ]);
 
         let cursor_card = card(vec![
@@ -672,12 +678,6 @@ impl Render for SettingsView {
                 "Line spacing",
                 None,
                 line_spacing_dropdown(self, focused_field(&self.line_spacing_focus), cx)
-                    .into_any_element(),
-            ),
-            setting_row(
-                "UI zoom",
-                Some("Scales the tabs and the directory breadcrumb."),
-                ui_zoom_dropdown(self, focused_field(&self.ui_zoom_focus), cx)
                     .into_any_element(),
             ),
         ]);
@@ -857,12 +857,6 @@ impl Render for SettingsView {
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(rgb(TITLE_COLOR))
                                     .child("Settings"),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(rgb(HINT_COLOR))
-                                    .child("Appearance, cursor, font, and window defaults."),
                             ),
                     )
                     .when(self.saved_visible, |header| {
