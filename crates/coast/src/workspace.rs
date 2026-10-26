@@ -3,6 +3,7 @@
 //! Styled after Windows Terminal: tabs live in a custom-drawn titlebar row,
 //! traffic lights inset on the left, `+` button for new tabs.
 
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,6 +13,10 @@ use gpui::{prelude::*, *};
 use crate::settings_view::SettingsView;
 use crate::terminal_view::TerminalView;
 use terminal_core::{CursorShape, Session, SpawnOptions};
+
+/// Width of the edge fade/chevron overlays on the tab strip. A scrolled-to
+/// tab is kept this far from a viewport edge so an overlay never covers it.
+const TAB_EDGE_WIDTH: f32 = 24.;
 
 /// Maps a `Settings::cursor_shape` string to alacritty's cursor shape,
 /// defaulting to `Block` for anything unrecognized.
@@ -97,6 +102,9 @@ pub struct Workspace {
     /// Scroll position of the tab strip, so it can be scrolled horizontally
     /// when there are more tabs than fit the window's width.
     tab_scroll_handle: ScrollHandle,
+    /// Set when the active tab should be scrolled fully into view; applied
+    /// in `render` once the tab's bounds are known.
+    tab_scroll_pending: Cell<bool>,
 }
 
 impl Workspace {
@@ -120,6 +128,7 @@ impl Workspace {
             close_confirm_focus: cx.focus_handle(),
             save_epoch: 0,
             tab_scroll_handle: ScrollHandle::new(),
+            tab_scroll_pending: Cell::new(false),
         };
         this.spawn_reaper(cx);
         this
@@ -449,10 +458,43 @@ impl Workspace {
     /// in the logs) is a reliable signal that layout has caught up, so
     /// re-running the scroll then corrects any such stale adjustment.
     fn scroll_active_tab_into_view(&self) {
+        self.tab_scroll_pending.set(true);
+    }
+
+    /// Applies a pending `scroll_active_tab_into_view` using the tab's
+    /// laid-out bounds, keeping `TAB_EDGE_WIDTH` clear on each side so the
+    /// edge overlays never hide part of it. Retries next frame until the
+    /// tab has been laid out.
+    fn apply_pending_tab_scroll(&self, active: usize, window: &mut Window) {
+        if !self.tab_scroll_pending.get() {
+            return;
+        }
         // Each tab pushes two children onto the tab strip (the tab itself,
         // then its trailing divider), so the active tab's own child index
         // there is always double its index in `self.tabs`.
-        self.tab_scroll_handle.scroll_to_item(self.active * 2);
+        let handle = &self.tab_scroll_handle;
+        let viewport = handle.bounds();
+        let Some(item) = handle.bounds_for_item(active * 2) else {
+            window.request_animation_frame();
+            return;
+        };
+        let view_w = f32::from(viewport.size.width);
+        if view_w <= 0. {
+            window.request_animation_frame();
+            return;
+        }
+        self.tab_scroll_pending.set(false);
+        // Child bounds are in unscrolled content coordinates.
+        let left = f32::from(item.left() - viewport.left());
+        let right = f32::from(item.right() - viewport.left());
+        let mut scroll = -f32::from(handle.offset().x);
+        if left - scroll < TAB_EDGE_WIDTH {
+            scroll = left - TAB_EDGE_WIDTH;
+        } else if right - scroll > view_w - TAB_EDGE_WIDTH {
+            scroll = right - view_w + TAB_EDGE_WIDTH;
+        }
+        let scroll = scroll.clamp(0., f32::from(handle.max_offset().width).max(0.));
+        handle.set_offset(point(px(-scroll), handle.offset().y));
     }
 
     /// Cycle to the next tab, wrapping around.
@@ -565,6 +607,7 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bg = crate::colors::hsla(self.theme.background);
         let active = self.clamped_active();
+        self.apply_pending_tab_scroll(active, window);
 
         let chrome_bar = crate::colors::hsla(self.chrome.bar);
         let chrome_active_tab = crate::colors::hsla(self.chrome.active_tab);
@@ -713,7 +756,6 @@ impl Render for Workspace {
         // Edge fades/chevrons hinting that more tabs are scrolled off to
         // that side — siblings of `tabs_row` (not children of it) so they
         // stay put over the strip instead of scrolling away with it.
-        const EDGE_WIDTH: f32 = 24.;
         let scroll_offset = self.tab_scroll_handle.offset();
         let max_scroll = self.tab_scroll_handle.max_offset();
         // Flex layout leaves sub-pixel rounding noise in the offset/max even
@@ -751,7 +793,7 @@ impl Render for Workspace {
                     .left_0()
                     .top_0()
                     .h(px(BAR_HEIGHT))
-                    .w(px(EDGE_WIDTH))
+                    .w(px(TAB_EDGE_WIDTH))
                     .flex()
                     .items_center()
                     .justify_start()
@@ -768,7 +810,7 @@ impl Render for Workspace {
                     .right_0()
                     .top_0()
                     .h(px(BAR_HEIGHT))
-                    .w(px(EDGE_WIDTH))
+                    .w(px(TAB_EDGE_WIDTH))
                     .flex()
                     .items_center()
                     .justify_end()
