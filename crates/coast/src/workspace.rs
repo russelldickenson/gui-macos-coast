@@ -150,6 +150,15 @@ impl Workspace {
                         .filter(|tab| matches!(tab.kind, TabKind::Terminal(_)))
                         .count();
                     let prev_active = workspace.tabs.get(workspace.active).map(|t| t.id);
+                    let all_exited = terminals_before > 0
+                        && workspace
+                            .tabs
+                            .iter()
+                            .filter(|tab| matches!(tab.kind, TabKind::Terminal(_)))
+                            .all(|tab| tab.kind.exited(cx).is_some());
+                    if all_exited {
+                        workspace.persist_session(cx);
+                    }
                     workspace.tabs.retain(|tab| tab.kind.exited(cx).is_none());
                     let terminals_after = workspace
                         .tabs
@@ -269,6 +278,18 @@ impl Workspace {
 
     /// Show the live "cols x rows" HUD, resetting its auto-hide timer. Only
     /// the active tab's resize events reach here (inactive tabs aren't
+    /// Write the current tabs to disk, unless there are none to save (so a
+    /// window that is already emptied or torn down never clobbers a good
+    /// session file). Called wherever the tab set is about to vanish before
+    /// `cx.quit()` runs the final save: window close, last tab closing, last
+    /// shell exiting.
+    pub fn persist_session(&self, cx: &App) {
+        let saved = self.save_session_state(cx);
+        if !saved.tabs.is_empty() {
+            let _ = saved.save();
+        }
+    }
+
     /// rendered, so their `TerminalElement` never runs `prepaint`).
     fn show_resize_hud(&mut self, cols: u16, rows: u16, cx: &mut Context<Self>) {
         self.resize_hud = Some((cols, rows));
@@ -358,6 +379,9 @@ impl Workspace {
         }
         let prev_active = self.tabs.get(self.active).map(|t| t.id);
         self.tabs.remove(ix);
+        if self.tabs.len() == 1 {
+            self.persist_session(cx);
+        }
         if self.tabs.is_empty() {
             cx.quit();
             return;

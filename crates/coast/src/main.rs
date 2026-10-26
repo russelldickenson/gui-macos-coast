@@ -216,14 +216,32 @@ fn main() {
             .ok();
 
         // Save each terminal tab's cwd so the next launch can restore
+        // Closing the window (e.g. the red title-bar button) tears the
+        // workspace down before `on_app_quit` runs, so save while it still
+        // exists.
+        handle
+            .update(cx, |_workspace, window, cx| {
+                let this = cx.entity();
+                window.on_window_should_close(cx, move |_window, cx| {
+                    this.read(cx).persist_session(cx);
+                    true
+                });
+            })
+            .ok();
+
         // them. Fires on every quit path (the Quit action, the last tab
         // closing, the reaper quitting after the last shell exits, and
         // Cmd+Q/Dock quit) since they all funnel through `cx.quit()`.
         cx.on_app_quit(move |cx| {
-            let saved = handle
-                .update(cx, |workspace, _window, cx| workspace.save_session_state(cx))
-                .unwrap_or_default();
-            let _ = saved.save();
+            // A failed update (window already gone) or an empty tab list
+            // must not overwrite the session saved at window close.
+            if let Ok(saved) =
+                handle.update(cx, |workspace, _window, cx| workspace.save_session_state(cx))
+            {
+                if !saved.tabs.is_empty() {
+                    let _ = saved.save();
+                }
+            }
             async {}
         })
         .detach();
