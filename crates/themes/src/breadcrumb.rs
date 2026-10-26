@@ -45,6 +45,24 @@ impl BreadcrumbTheme {
     }
 }
 
+impl BreadcrumbTheme {
+    /// Whether the fill is dark (perceived luminance below mid-gray).
+    pub fn is_dark(&self) -> bool {
+        let Color { r, g, b } = self.pill;
+        (299 * r as u32 + 587 * g as u32 + 114 * b as u32) / 1000 < 128
+    }
+
+    /// The builtin of the opposite brightness: light for a dark theme and
+    /// vice versa. Used for popups that must stand out from the bar.
+    pub fn opposite(&self) -> BreadcrumbTheme {
+        if self.is_dark() {
+            light()
+        } else {
+            dark()
+        }
+    }
+}
+
 pub fn builtin_breadcrumb_themes() -> Vec<BreadcrumbTheme> {
     vec![light(), dark()]
 }
@@ -81,6 +99,12 @@ mod tests {
             assert_eq!(BreadcrumbTheme::find(&theme.name), Some(theme));
         }
         assert!(BreadcrumbTheme::find("no-such-theme").is_none());
+    }
+
+    #[test]
+    fn opposite_flips_brightness() {
+        assert!(light().opposite().is_dark());
+        assert!(!dark().opposite().is_dark());
     }
 
     #[test]

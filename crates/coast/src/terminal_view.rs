@@ -472,7 +472,9 @@ impl TerminalView {
     /// The right-click menu: "Copy" when text is selected, "Paste" when the
     /// clipboard holds text.
     fn render_context_menu(&self, position: Point<Pixels>, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = &self.breadcrumb_theme;
+        // Opposite brightness to the breadcrumb bar so the menu stands out
+        // from the terminal background.
+        let theme = self.breadcrumb_theme.opposite();
         let (bg, border, hover, text) = (
             colors::hsla(theme.pill),
             colors::hsla(theme.pill_border),
@@ -482,15 +484,20 @@ impl TerminalView {
         let can_copy = self.session.selection_text().is_some();
         let can_paste = cx.read_from_clipboard().is_some_and(|i| i.text().is_some());
 
-        let item = |id: &'static str, label: &'static str, first: bool| {
+        let item = |id: &'static str, icon: &'static str, label: &'static str, first: bool| {
             let mut el = gpui::div()
                 .id(id)
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
                 .px_3()
                 .py_1()
                 .text_sm()
                 .text_color(text)
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover))
+                .child(svg().path(icon).size(px(14.)).text_color(text))
                 .child(label);
             if !first {
                 el = el.border_t_1().border_color(border);
@@ -514,7 +521,7 @@ impl TerminalView {
                 cx.notify();
             }));
         if can_copy {
-            list = list.child(item("ctx-copy", "Copy", true).on_mouse_down(
+            list = list.child(item("ctx-copy", "icons/copy.svg", "Copy", true).on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|view, _, _window, cx| {
                     view.copy_selection(cx);
@@ -524,7 +531,7 @@ impl TerminalView {
             ));
         }
         if can_paste {
-            list = list.child(item("ctx-paste", "Paste", !can_copy).on_mouse_down(
+            list = list.child(item("ctx-paste", "icons/paste.svg", "Paste", !can_copy).on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|view, _, _window, cx| {
                     view.context_menu = None;
