@@ -123,6 +123,8 @@ pub struct TerminalView {
     selecting: bool,
     /// Window position of the open right-click menu, if any.
     context_menu: Option<Point<Pixels>>,
+    /// Multiplier for the breadcrumb bar's sizing (see `Settings::zoom`).
+    ui_zoom: f32,
 }
 
 impl TerminalView {
@@ -171,6 +173,7 @@ impl TerminalView {
             grid_origin: point(px(0.), px(0.)),
             selecting: false,
             context_menu: None,
+            ui_zoom: 1.0,
         };
         this.spawn_poll(cx);
         this
@@ -223,6 +226,14 @@ impl TerminalView {
             self.breadcrumb_open = false;
         }
         cx.notify();
+    }
+
+    /// Set the breadcrumb bar's size multiplier.
+    pub fn set_ui_zoom(&mut self, zoom: f32, cx: &mut Context<Self>) {
+        if self.ui_zoom != zoom {
+            self.ui_zoom = zoom;
+            cx.notify();
+        }
     }
 
     pub fn exited(&self) -> Option<i32> {
@@ -629,6 +640,7 @@ impl Render for TerminalView {
                     self.content_width,
                     &self.breadcrumb_theme,
                     &subdirs,
+                    self.ui_zoom,
                     cx,
                 )
             })
@@ -729,14 +741,14 @@ const BREADCRUMB_PILL_OVERHEAD: f32 = 20.;
 const BREADCRUMB_ICON_WIDTH: f32 = 18.;
 const BREADCRUMB_CHEVRON_WIDTH: f32 = 32.;
 
-fn estimate_crumb_width(crumb: &Crumb) -> f32 {
-    crumb.label.chars().count() as f32 * BREADCRUMB_CHAR_WIDTH
+fn estimate_crumb_width(crumb: &Crumb, zoom: f32) -> f32 {
+    zoom * (crumb.label.chars().count() as f32 * BREADCRUMB_CHAR_WIDTH
         + BREADCRUMB_PILL_OVERHEAD
         + if crumb.is_home {
             BREADCRUMB_ICON_WIDTH
         } else {
             0.
-        }
+        })
 }
 
 /// Pick which segments to show given the space available: everything, if
@@ -744,31 +756,35 @@ fn estimate_crumb_width(crumb: &Crumb) -> f32 {
 /// of the segments right before the last as fit are kept too (they're the
 /// ones nearest to — and so most useful for navigating around — the
 /// current directory), with the dropped middle collapsed into one ellipsis.
-fn collapse_breadcrumb(segments: &[Crumb], available_width: Pixels) -> Vec<BreadcrumbItem<'_>> {
+fn collapse_breadcrumb(
+    segments: &[Crumb],
+    available_width: Pixels,
+    zoom: f32,
+) -> Vec<BreadcrumbItem<'_>> {
     let n = segments.len();
     if n <= 2 {
         return segments.iter().map(BreadcrumbItem::Crumb).collect();
     }
 
     let available = f32::from(available_width);
-    let full_width: f32 = segments.iter().map(estimate_crumb_width).sum::<f32>()
-        + BREADCRUMB_CHEVRON_WIDTH * (n - 1) as f32;
+    let full_width: f32 = segments.iter().map(|c| estimate_crumb_width(c, zoom)).sum::<f32>()
+        + BREADCRUMB_CHEVRON_WIDTH * zoom * (n - 1) as f32;
     if full_width <= available {
         return segments.iter().map(BreadcrumbItem::Crumb).collect();
     }
 
     let first = &segments[0];
     let last = &segments[n - 1];
-    let ellipsis_width = BREADCRUMB_PILL_OVERHEAD + BREADCRUMB_CHAR_WIDTH;
+    let ellipsis_width = (BREADCRUMB_PILL_OVERHEAD + BREADCRUMB_CHAR_WIDTH) * zoom;
     let mut budget = available
-        - estimate_crumb_width(first)
-        - estimate_crumb_width(last)
-        - BREADCRUMB_CHEVRON_WIDTH * 2.
+        - estimate_crumb_width(first, zoom)
+        - estimate_crumb_width(last, zoom)
+        - BREADCRUMB_CHEVRON_WIDTH * zoom * 2.
         - ellipsis_width;
 
     let mut tail: Vec<&Crumb> = Vec::new();
     for crumb in segments[1..n - 1].iter().rev() {
-        let width = estimate_crumb_width(crumb) + BREADCRUMB_CHEVRON_WIDTH;
+        let width = estimate_crumb_width(crumb, zoom) + BREADCRUMB_CHEVRON_WIDTH * zoom;
         if width > budget {
             break;
         }
@@ -854,12 +870,13 @@ fn breadcrumb(
     content_width: Pixels,
     theme: &coast_themes::BreadcrumbTheme,
     subdirs: &[String],
+    zoom: f32,
     cx: &mut Context<TerminalView>,
 ) -> impl IntoElement {
     let segments = breadcrumb_segments(path);
     // Leave room for the bar's own horizontal padding either side.
-    let available_width = (content_width - px(16.)).max(px(0.));
-    let items = collapse_breadcrumb(&segments, available_width);
+    let available_width = (content_width - px(16. * zoom)).max(px(0.));
+    let items = collapse_breadcrumb(&segments, available_width, zoom);
     let last_ix = items.len().saturating_sub(1);
 
     let pill_bg = colors::hsla(theme.pill);
@@ -871,12 +888,12 @@ fn breadcrumb(
     let mut bar = gpui::div()
         .flex_none()
         .w_full()
-        .h(px(BREADCRUMB_BAR_HEIGHT))
-        .px_2()
+        .h(px(BREADCRUMB_BAR_HEIGHT * zoom))
+        .px(px(8. * zoom))
         .flex()
         .flex_row()
         .items_center()
-        .gap_2()
+        .gap(px(8. * zoom))
         .bg(pill_bg);
 
     for (ix, item) in items.iter().enumerate() {
@@ -885,14 +902,14 @@ fn breadcrumb(
             BreadcrumbItem::Ellipsis => {
                 bar = bar.child(
                     gpui::div()
-                        .px(px(4.))
-                        .text_size(px(12.))
+                        .px(px(4. * zoom))
+                        .text_size(px(12. * zoom))
                         .text_color(muted)
                         .child("…"),
                 );
                 if !is_last {
                     bar = bar.child(
-                        gpui::div().text_size(px(16.)).text_color(muted).child("›"),
+                        gpui::div().text_size(px(16. * zoom)).text_color(muted).child("›"),
                     );
                 }
                 continue;
@@ -910,12 +927,12 @@ fn breadcrumb(
             .flex()
             .flex_row()
             .items_center()
-            .gap_1p5()
-            .px(px(8.))
-            .py(px(1.))
+            .gap(px(6. * zoom))
+            .px(px(8. * zoom))
+            .py(px(1. * zoom))
             .rounded_md()
             .cursor_pointer()
-            .text_size(px(12.))
+            .text_size(px(12. * zoom))
             .bg(pill_bg)
             .border_1()
             .border_color(pill_border)
@@ -933,7 +950,7 @@ fn breadcrumb(
                 cx.listener(move |view, _, _window, cx| view.cd_to(&target, cx)),
             );
             bar = bar.child(pill);
-            bar = bar.child(gpui::div().text_size(px(16.)).text_color(muted).child("›"));
+            bar = bar.child(gpui::div().text_size(px(16. * zoom)).text_color(muted).child("›"));
             continue;
         }
 
@@ -957,7 +974,7 @@ fn breadcrumb(
             .child(
                 svg()
                     .path("icons/chevron-down.svg")
-                    .size(px(16.))
+                    .size(px(16. * zoom))
                     .text_color(muted),
             )
             .on_mouse_down(MouseButton::Left, cx.listener(toggle_breadcrumb));
@@ -966,7 +983,7 @@ fn breadcrumb(
             .flex()
             .flex_row()
             .items_center()
-            .gap_1()
+            .gap(px(4. * zoom))
             .child(pill)
             .child(chevron);
 
@@ -974,9 +991,9 @@ fn breadcrumb(
         if open {
             let mut list = gpui::div()
                 .id("breadcrumb-subdirs")
-                .mb_1()
-                .w(px(220.))
-                .max_h(px(260.))
+                .mb(px(4. * zoom))
+                .w(px(220. * zoom))
+                .max_h(px(260. * zoom))
                 .overflow_y_scroll()
                 .flex()
                 .flex_col()
@@ -989,9 +1006,9 @@ fn breadcrumb(
             if subdirs.is_empty() {
                 list = list.child(
                     gpui::div()
-                        .px_2()
-                        .py_1()
-                        .text_xs()
+                        .px(px(8. * zoom))
+                        .py(px(4. * zoom))
+                        .text_size(px(12. * zoom))
                         .text_color(muted)
                         .child("No subdirectories"),
                 );
@@ -1001,9 +1018,9 @@ fn breadcrumb(
                     let child_path = path.join(name);
                     let mut item = gpui::div()
                         .id(("breadcrumb-subdir", ix))
-                        .px_2()
-                        .py_1()
-                        .text_xs()
+                        .px(px(8. * zoom))
+                        .py(px(4. * zoom))
+                        .text_size(px(12. * zoom))
                         .text_color(text_color)
                         .cursor_pointer()
                         .hover(move |s| s.bg(pill_hover))
@@ -1545,7 +1562,7 @@ mod tests {
     #[test]
     fn keeps_everything_when_it_fits() {
         let segs = crumbs(&["Home", "personal", "repos", "coast"]);
-        let items = collapse_breadcrumb(&segs, px(2000.));
+        let items = collapse_breadcrumb(&segs, px(2000.), 1.);
         assert_eq!(labels_of(&items), vec!["Home", "personal", "repos", "coast"]);
     }
 
@@ -1554,7 +1571,7 @@ mod tests {
         let segs = crumbs(&[
             "Home", "a", "b", "c", "d", "e", "f", "g", "current-directory",
         ]);
-        let items = collapse_breadcrumb(&segs, px(220.));
+        let items = collapse_breadcrumb(&segs, px(220.), 1.);
         let labels = labels_of(&items);
         assert_eq!(labels.first(), Some(&"Home"));
         assert_eq!(labels.last(), Some(&"current-directory"));
@@ -1568,7 +1585,7 @@ mod tests {
     #[test]
     fn two_segments_never_collapse() {
         let segs = crumbs(&["/", "only-child-directory-with-a-very-long-name"]);
-        let items = collapse_breadcrumb(&segs, px(1.));
+        let items = collapse_breadcrumb(&segs, px(1.), 1.);
         assert_eq!(labels_of(&items).len(), 2);
     }
 }

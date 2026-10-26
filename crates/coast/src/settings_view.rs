@@ -73,6 +73,7 @@ enum FocusSlot {
     FontFamily,
     FontSize,
     LineSpacing,
+    UiZoom,
     Cols,
     Rows,
     Scrollback,
@@ -82,7 +83,7 @@ enum FocusSlot {
 }
 
 impl FocusSlot {
-    const ORDER: [FocusSlot; 15] = [
+    const ORDER: [FocusSlot; 16] = [
         FocusSlot::Theme,
         FocusSlot::Import,
         FocusSlot::Chrome,
@@ -92,6 +93,7 @@ impl FocusSlot {
         FocusSlot::FontFamily,
         FocusSlot::FontSize,
         FocusSlot::LineSpacing,
+        FocusSlot::UiZoom,
         FocusSlot::Cols,
         FocusSlot::Rows,
         FocusSlot::Scrollback,
@@ -131,6 +133,7 @@ impl FocusSlot {
             FocusSlot::FontFamily => &view.font_family_focus,
             FocusSlot::FontSize => &view.font_size_focus,
             FocusSlot::LineSpacing => &view.line_spacing_focus,
+            FocusSlot::UiZoom => &view.ui_zoom_focus,
             FocusSlot::Cols => &view.cols_field.focus,
             FocusSlot::Rows => &view.rows_field.focus,
             FocusSlot::Scrollback => &view.scrollback_field.focus,
@@ -249,6 +252,7 @@ enum OpenDropdown {
     FontFamily,
     FontSize,
     LineSpacing,
+    UiZoom,
 }
 
 pub struct SettingsView {
@@ -263,6 +267,7 @@ pub struct SettingsView {
     font_family_focus: FocusHandle,
     font_size_focus: FocusHandle,
     line_spacing_focus: FocusHandle,
+    ui_zoom_focus: FocusHandle,
     confirm_close_focus: FocusHandle,
     breadcrumb_focus: FocusHandle,
     breadcrumb_theme_focus: FocusHandle,
@@ -316,6 +321,7 @@ impl SettingsView {
             font_family_focus: cx.focus_handle(),
             font_size_focus: cx.focus_handle(),
             line_spacing_focus: cx.focus_handle(),
+            ui_zoom_focus: cx.focus_handle(),
             confirm_close_focus: cx.focus_handle(),
             breadcrumb_focus: cx.focus_handle(),
             breadcrumb_theme_focus: cx.focus_handle(),
@@ -632,7 +638,7 @@ impl Render for SettingsView {
                     .child(
                         gpui::div()
                             .id("cursor-color-swatch")
-                            .size(px(18.))
+                            .size(rems(18. / 16.))
                             .rounded_md()
                             .cursor_pointer()
                             .border_1()
@@ -666,6 +672,12 @@ impl Render for SettingsView {
                 "Line spacing",
                 None,
                 line_spacing_dropdown(self, focused_field(&self.line_spacing_focus), cx)
+                    .into_any_element(),
+            ),
+            setting_row(
+                "UI zoom",
+                Some("Scales the tabs and the directory breadcrumb."),
+                ui_zoom_dropdown(self, focused_field(&self.ui_zoom_focus), cx)
                     .into_any_element(),
             ),
         ]);
@@ -934,15 +946,15 @@ fn settings_scrollbar(handle: &ScrollHandle) -> impl IntoElement {
         .top_0()
         .bottom_0()
         .right_0()
-        .w(px(8.))
-        .py(px(2.))
+        .w(rems(8. / 16.))
+        .py(rems(2. / 16.))
         .flex()
         .flex_col()
         .child(spacer(above))
         .child(
             thumb
-                .min_h(px(24.))
-                .mx(px(2.))
+                .min_h(rems(24. / 16.))
+                .mx(rems(2. / 16.))
                 .rounded_full()
                 .bg(rgb(FIELD_BORDER)),
         )
@@ -1034,7 +1046,7 @@ fn text_field(
         .flex()
         .flex_row()
         .items_center()
-        .w(px(120.))
+        .w(rems(120. / 16.))
         .px_2()
         .py_1()
         .rounded_md()
@@ -1053,9 +1065,9 @@ fn text_field(
         .when(is_focused, |field| {
             field.child(
                 div()
-                    .w(px(1.))
-                    .h(px(14.))
-                    .ml(px(1.))
+                    .w(rems(1. / 16.))
+                    .h(rems(14. / 16.))
+                    .ml(rems(1. / 16.))
                     .bg(rgb(FIELD_BORDER_FOCUSED)),
             )
         })
@@ -1127,17 +1139,17 @@ fn toggle_switch(
             }
         }))
         .flex_none()
-        .w(px(36.))
-        .h(px(20.))
+        .w(rems(36. / 16.))
+        .h(rems(20. / 16.))
         .rounded_full()
-        .p(px(2.))
+        .p(rems(2. / 16.))
         .bg(rgb(if is_on { ACCENT } else { 0xe4e4e6 }))
         .flex()
         .flex_row()
         .cursor_pointer()
         .when(is_on, |d| d.justify_end())
         .when(!is_on, |d| d.justify_start())
-        .child(div().size(px(16.)).rounded_full().bg(rgb(0xffffff)).shadow(vec![BoxShadow {
+        .child(div().size(rems(16. / 16.)).rounded_full().bg(rgb(0xffffff)).shadow(vec![BoxShadow {
             color: Hsla::from(rgb(0x000000)).opacity(0.25),
             offset: point(px(0.), px(1.)),
             blur_radius: px(1.),
@@ -1225,7 +1237,7 @@ fn dropdown(
         .items_center()
         .justify_between()
         .gap_2()
-        .w(px(width))
+        .w(rems(width / 16.))
         .px_2()
         .py_1()
         .rounded_md()
@@ -1261,7 +1273,7 @@ fn dropdown(
     if is_open {
         let mut list = div()
             .mt_1()
-            .w(px(width))
+            .w(rems(width / 16.))
             .flex()
             .flex_col()
             .rounded_md()
@@ -1386,7 +1398,7 @@ fn radio_group<T: Clone + 'static>(
                 .cursor_pointer()
                 .child(
                     div()
-                        .size(px(14.))
+                        .size(rems(14. / 16.))
                         .rounded_full()
                         .border_1()
                         .border_color(rgb(if is_selected { ACCENT } else { FIELD_BORDER }))
@@ -1394,7 +1406,7 @@ fn radio_group<T: Clone + 'static>(
                         .items_center()
                         .justify_center()
                         .when(is_selected, |d| {
-                            d.child(div().size(px(6.)).rounded_full().bg(rgb(ACCENT)))
+                            d.child(div().size(rems(6. / 16.)).rounded_full().bg(rgb(ACCENT)))
                         }),
                 )
                 .child(
@@ -1539,6 +1551,59 @@ fn line_spacing_dropdown(
             is_focused,
             next: FocusSlot::LineSpacing.next().handle(view),
             prev: FocusSlot::LineSpacing.prev().handle(view),
+        },
+        cx,
+    )
+}
+
+fn ui_zoom_dropdown(
+    view: &SettingsView,
+    is_focused: bool,
+    cx: &mut Context<SettingsView>,
+) -> impl IntoElement {
+    const ZOOMS: [f32; 8] = [0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5];
+    let label = |z: f32| {
+        let pct = (z * 100.).round() as i32;
+        if pct == 100 {
+            format!("{pct}% (default)")
+        } else {
+            format!("{pct}%")
+        }
+    };
+    let options: Vec<(String, String)> = ZOOMS
+        .iter()
+        .map(|z| (z.to_string(), label(*z)))
+        .collect();
+    let current_zoom = view.settings.zoom();
+    let current = current_zoom.to_string();
+    let current_label = label(current_zoom);
+    dropdown(
+        current_label,
+        view.open_dropdown == OpenDropdown::UiZoom,
+        view.dropdown_highlight,
+        140.,
+        &options,
+        move |zoom| *zoom == current,
+        |this, _window, cx| {
+            this.open_dropdown = if this.open_dropdown == OpenDropdown::UiZoom {
+                OpenDropdown::None
+            } else {
+                OpenDropdown::UiZoom
+            };
+            cx.notify();
+        },
+        |this| this.open_dropdown = OpenDropdown::None,
+        |this, zoom: String, _window, cx| {
+            if let Ok(v) = zoom.parse::<f32>() {
+                this.settings.ui_zoom = v;
+                this.commit(cx);
+            }
+        },
+        Nav {
+            focus: FocusSlot::UiZoom.handle(view),
+            is_focused,
+            next: FocusSlot::UiZoom.next().handle(view),
+            prev: FocusSlot::UiZoom.prev().handle(view),
         },
         cx,
     )

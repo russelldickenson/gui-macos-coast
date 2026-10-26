@@ -223,7 +223,7 @@ impl Workspace {
         let theme = self.theme.clone();
         let breadcrumb_theme = self.breadcrumb_theme.clone();
         let view = cx.new(|cx| {
-            TerminalView::new(
+            let mut view = TerminalView::new(
                 session.clone(),
                 SharedString::new(settings.font_family.clone()),
                 settings.font_size,
@@ -233,7 +233,9 @@ impl Workspace {
                 settings.show_breadcrumb,
                 breadcrumb_theme,
                 cx,
-            )
+            );
+            view.set_ui_zoom(settings.zoom(), cx);
+            view
         });
         cx.subscribe(&view, |workspace, _view, event: &crate::terminal_view::ResizedEvent, cx| {
             workspace.show_resize_hud(event.cols, event.rows, cx);
@@ -276,8 +278,6 @@ impl Workspace {
         coast_settings::session_state::SavedSession { tabs }
     }
 
-    /// Show the live "cols x rows" HUD, resetting its auto-hide timer. Only
-    /// the active tab's resize events reach here (inactive tabs aren't
     /// Write the current tabs to disk, unless there are none to save (so a
     /// window that is already emptied or torn down never clobbers a good
     /// session file). Called wherever the tab set is about to vanish before
@@ -290,6 +290,8 @@ impl Workspace {
         }
     }
 
+    /// Show the live "cols x rows" HUD, resetting its auto-hide timer. Only
+    /// the active tab's resize events reach here (inactive tabs aren't
     /// rendered, so their `TerminalElement` never runs `prepaint`).
     fn show_resize_hud(&mut self, cols: u16, rows: u16, cx: &mut Context<Self>) {
         self.resize_hud = Some((cols, rows));
@@ -377,11 +379,11 @@ impl Workspace {
         if ix >= self.tabs.len() {
             return;
         }
-        let prev_active = self.tabs.get(self.active).map(|t| t.id);
-        self.tabs.remove(ix);
         if self.tabs.len() == 1 {
             self.persist_session(cx);
         }
+        let prev_active = self.tabs.get(self.active).map(|t| t.id);
+        self.tabs.remove(ix);
         if self.tabs.is_empty() {
             cx.quit();
             return;
@@ -498,6 +500,7 @@ impl Workspace {
         // there is always double its index in `self.tabs`.
         let handle = &self.tab_scroll_handle;
         let viewport = handle.bounds();
+        let edge = TAB_EDGE_WIDTH * self.settings.zoom();
         let Some(item) = handle.bounds_for_item(active * 2) else {
             window.request_animation_frame();
             return;
@@ -512,10 +515,10 @@ impl Workspace {
         let left = f32::from(item.left() - viewport.left());
         let right = f32::from(item.right() - viewport.left());
         let mut scroll = -f32::from(handle.offset().x);
-        if left - scroll < TAB_EDGE_WIDTH {
-            scroll = left - TAB_EDGE_WIDTH;
-        } else if right - scroll > view_w - TAB_EDGE_WIDTH {
-            scroll = right - view_w + TAB_EDGE_WIDTH;
+        if left - scroll < edge {
+            scroll = left - edge;
+        } else if right - scroll > view_w - edge {
+            scroll = right - view_w + edge;
         }
         let scroll = scroll.clamp(0., f32::from(handle.max_offset().width).max(0.));
         handle.set_offset(point(px(-scroll), handle.offset().y));
@@ -569,6 +572,7 @@ impl Workspace {
         self.breadcrumb_theme = settings.breadcrumb_theme();
         self.settings = settings;
         self.schedule_save(cx);
+        self.scroll_active_tab_into_view();
 
         let font_family = SharedString::new(self.settings.font_family.clone());
         let font_size = self.settings.font_size;
@@ -577,9 +581,11 @@ impl Workspace {
         let cursor_blink = self.settings.cursor_blink;
         let show_breadcrumb = self.settings.show_breadcrumb;
         let breadcrumb_theme = self.breadcrumb_theme.clone();
+        let ui_zoom = self.settings.zoom();
         for tab in &self.tabs {
             if let TabKind::Terminal(view) = &tab.kind {
                 view.update(cx, |view, cx| {
+                    view.set_ui_zoom(ui_zoom, cx);
                     view.update_settings(
                         font_family.clone(),
                         font_size,
@@ -641,16 +647,22 @@ impl Render for Workspace {
         let chrome_hover = crate::colors::hsla(self.chrome.hover);
         let chrome_separator = crate::colors::hsla(self.chrome.separator);
 
-        const TAB_WIDTH: f32 = 220.;
+        let z = self.settings.zoom();
+        // Scales every rem-based size too (settings page, context menu,
+        // dialogs), which don't get an explicit `* z` of their own.
+        window.set_rem_size(px(16. * z));
+        let bar_h = px(BAR_HEIGHT * z);
+        let tab_h = px(TAB_HEIGHT * z);
+        let tab_w = px(220. * z);
 
         let mut bar = div()
             .flex()
             .flex_row()
             .items_end()
-            .h(px(BAR_HEIGHT))
+            .h(bar_h)
             .pl(px(72.))
-            .pr(px(8.))
-            .gap_1()
+            .pr(px(8. * z))
+            .gap(px(4. * z))
             .bg(chrome_bar)
             .border_b_1()
             .border_color(chrome_separator)
@@ -676,7 +688,7 @@ impl Render for Workspace {
             .flex()
             .flex_row()
             .items_end()
-            .h(px(BAR_HEIGHT))
+            .h(bar_h)
             // Grow=0 so this strip doesn't compete for space with the
             // trailing drag-spacer below when tabs fit comfortably —
             // shrink=1 (and `min_w_0`) lets it be clamped to the space
@@ -697,11 +709,11 @@ impl Render for Workspace {
                     .flex_row()
                     .items_center()
                     .justify_between()
-                    .gap_2()
-                    .h(px(TAB_HEIGHT))
-                    .w(px(TAB_WIDTH))
-                    .pl_4()
-                    .pr_2()
+                    .gap(px(8. * z))
+                    .h(tab_h)
+                    .w(tab_w)
+                    .pl(px(16. * z))
+                    .pr(px(8. * z))
                     .rounded_t_md()
                     .bg(if is_active {
                         chrome_active_tab
@@ -724,11 +736,11 @@ impl Render for Workspace {
                     } else {
                         chrome_inactive_tab_text
                     })
-                    .text_size(px(12.))
+                    .text_size(px(12. * z))
                     .child(div().flex_1().truncate().child(title))
                     .child(
                         div()
-                            .size(px(20.))
+                            .size(px(20. * z))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -765,8 +777,8 @@ impl Render for Workspace {
             // tab is active never shifts any tab's position.
             let next_is_active = active == ix + 1;
             tabs_row = tabs_row.child(
-                div().h(px(TAB_HEIGHT)).flex().items_center().child(
-                    div().w(px(1.)).h(px(TAB_HEIGHT - 16.)).bg(
+                div().h(tab_h).flex().items_center().child(
+                    div().w(px(1.)).h(px((TAB_HEIGHT - 16.) * z)).bg(
                         if is_active || next_is_active {
                             Hsla::transparent_black()
                         } else {
@@ -803,7 +815,7 @@ impl Render for Workspace {
             .relative()
             .flex_initial()
             .min_w_0()
-            .h(px(BAR_HEIGHT))
+            .h(bar_h)
             .child(tabs_row);
 
         let edge_fade = |chrome_bar: Hsla| Hsla {
@@ -816,14 +828,14 @@ impl Render for Workspace {
                     .absolute()
                     .left_0()
                     .top_0()
-                    .h(px(BAR_HEIGHT))
-                    .w(px(TAB_EDGE_WIDTH))
+                    .h(bar_h)
+                    .w(px(TAB_EDGE_WIDTH * z))
                     .flex()
                     .items_center()
                     .justify_start()
                     .bg(edge_fade(chrome_bar))
                     .text_color(chrome_inactive_tab_text)
-                    .text_size(px(12.))
+                    .text_size(px(12. * z))
                     .child("‹"),
             );
         }
@@ -833,14 +845,14 @@ impl Render for Workspace {
                     .absolute()
                     .right_0()
                     .top_0()
-                    .h(px(BAR_HEIGHT))
-                    .w(px(TAB_EDGE_WIDTH))
+                    .h(bar_h)
+                    .w(px(TAB_EDGE_WIDTH * z))
                     .flex()
                     .items_center()
                     .justify_end()
                     .bg(edge_fade(chrome_bar))
                     .text_color(chrome_inactive_tab_text)
-                    .text_size(px(12.))
+                    .text_size(px(12. * z))
                     .child("›"),
             );
         }
@@ -850,13 +862,13 @@ impl Render for Workspace {
         bar = bar
             .child(
                 div()
-                    .h(px(TAB_HEIGHT))
+                    .h(tab_h)
                     .flex()
                     .items_center()
                     .child(
                         div()
-                            .h(px(28.))
-                            .w(px(28.))
+                            .h(px(28. * z))
+                            .w(px(28. * z))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -884,15 +896,15 @@ impl Render for Workspace {
             // Settings, pinned to the very right-hand end of the bar.
             .child(
                 div()
-                    .h(px(TAB_HEIGHT))
+                    .h(tab_h)
                     .flex()
                     .items_center()
-                    .pr_2()
+                    .pr(px(8. * z))
                     .child(
                         div()
                             .id("open-settings")
-                            .h(px(28.))
-                            .w(px(28.))
+                            .h(px(28. * z))
+                            .w(px(28. * z))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -901,7 +913,7 @@ impl Render for Workspace {
                             .child(
                                 svg()
                                     .path("icons/gear.svg")
-                                    .size(px(16.))
+                                    .size(px(16. * z))
                                     .text_color(chrome_inactive_tab_text),
                             )
                             .on_mouse_down(

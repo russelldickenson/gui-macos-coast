@@ -4,6 +4,7 @@
 //! font_family = "JetBrains Mono"
 //! font_size = 13.0
 //! line_spacing = 0.0 # extra px between rows, 0-4
+//! ui_zoom = 1.0 # multiplier for tab strip and breadcrumb sizing, 0.5-3
 //! theme = "Tokyo Night"
 //! chrome_theme = "Dark Gray"
 //! breadcrumb_theme = "Dark"
@@ -33,6 +34,10 @@ fn default_font_size() -> f32 {
 
 fn default_line_spacing() -> f32 {
     0.0
+}
+
+fn default_ui_zoom() -> f32 {
+    1.0
 }
 
 fn default_theme() -> String {
@@ -84,6 +89,10 @@ pub struct Settings {
     /// Extra px added between rows, on top of the font's own line height.
     #[serde(default = "default_line_spacing")]
     pub line_spacing: f32,
+    /// Multiplier applied to the size of the tab strip and the directory
+    /// breadcrumb (heights, widths, padding and text).
+    #[serde(default = "default_ui_zoom")]
+    pub ui_zoom: f32,
     #[serde(default = "default_theme")]
     pub theme: String,
     #[serde(default = "default_chrome_theme")]
@@ -124,6 +133,7 @@ impl Default for Settings {
             font_family: default_font_family(),
             font_size: default_font_size(),
             line_spacing: default_line_spacing(),
+            ui_zoom: default_ui_zoom(),
             theme: default_theme(),
             chrome_theme: default_chrome_theme(),
             scrollback_lines: default_scrollback_lines(),
@@ -140,6 +150,16 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// `ui_zoom` limited to a usable range, so a hand-edited config can't
+    /// collapse or blow up the tab strip.
+    pub fn zoom(&self) -> f32 {
+        if self.ui_zoom.is_finite() {
+            self.ui_zoom.clamp(0.5, 3.0)
+        } else {
+            1.0
+        }
+    }
+
     /// Load from disk, falling back to defaults when the file is missing.
     /// A present-but-unparseable file is an error.
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
@@ -299,6 +319,7 @@ mod tests {
         assert_eq!(s.font_family, "Menlo");
         assert_eq!(s.font_size, 12.0);
         assert_eq!(s.line_spacing, 0.0);
+        assert_eq!(s.ui_zoom, 1.0);
         assert_eq!(s.theme, "Campbell");
         assert_eq!(s.chrome_theme, "Light");
         assert_eq!(s.scrollback_lines, 10_000);

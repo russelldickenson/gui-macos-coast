@@ -152,7 +152,7 @@ fn main() {
         );
         let window_size = Size {
             width: cell.width * settings.default_cols as f32,
-            height: cell.height * settings.default_rows as f32 + px(workspace::BAR_HEIGHT),
+            height: cell.height * settings.default_rows as f32 + px(workspace::BAR_HEIGHT * settings.zoom()),
         };
 
         let handle = cx
@@ -168,8 +168,9 @@ fn main() {
                             // bar, so center against their span, not the
                             // whole (taller) bar.
                             px({
-                                let tab_top = workspace::BAR_HEIGHT - workspace::TAB_HEIGHT;
-                                tab_top + (workspace::TAB_HEIGHT - 16.) / 2.
+                                let z = settings.zoom();
+                                let tab_top = (workspace::BAR_HEIGHT - workspace::TAB_HEIGHT) * z;
+                                tab_top + (workspace::TAB_HEIGHT * z - 16.) / 2.
                             }),
                         )),
                     }),
@@ -215,7 +216,6 @@ fn main() {
             })
             .ok();
 
-        // Save each terminal tab's cwd so the next launch can restore
         // Closing the window (e.g. the red title-bar button) tears the
         // workspace down before `on_app_quit` runs, so save while it still
         // exists.
@@ -229,6 +229,7 @@ fn main() {
             })
             .ok();
 
+        // Save each terminal tab's cwd so the next launch can restore
         // them. Fires on every quit path (the Quit action, the last tab
         // closing, the reaper quitting after the last shell exits, and
         // Cmd+Q/Dock quit) since they all funnel through `cx.quit()`.
