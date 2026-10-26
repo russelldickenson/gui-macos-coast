@@ -531,7 +531,7 @@ impl Render for SettingsView {
                     .when_some(self.import_status.clone(), |row, (ok, message)| {
                         row.child(
                             div()
-                                .text_xs()
+                                .text_size(rems(11. / 16.))
                                 .text_color(rgb(if ok { 0x1a9c4b } else { 0xd64545 }))
                                 .child(message),
                         )
@@ -835,10 +835,10 @@ impl Render for SettingsView {
             .track_scroll(&self.scroll_handle)
             .size_full()
             .bg(rgb(PAGE_BG))
-            .p_6()
+            .p_4()
             .flex()
             .flex_col()
-            .gap_6()
+            .gap_4()
             .overflow_y_scroll()
             .child(
                 div()
@@ -853,7 +853,7 @@ impl Render for SettingsView {
                             .gap_1()
                             .child(
                                 div()
-                                    .text_2xl()
+                                    .text_size(rems(18. / 16.))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(rgb(TITLE_COLOR))
                                     .child("Settings"),
@@ -862,7 +862,7 @@ impl Render for SettingsView {
                     .when(self.saved_visible, |header| {
                         header.child(
                             div()
-                                .text_sm()
+                                .text_size(rems(12. / 16.))
                                 .text_color(rgb(0x1a9c4b))
                                 .child("✓ Saved"),
                         )
@@ -873,14 +873,14 @@ impl Render for SettingsView {
                     .w_full()
                     .flex()
                     .flex_row()
-                    .gap_6()
+                    .gap_4()
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .gap_6()
+                            .gap_4()
                             .child(section("Appearance", appearance_card))
                             .child(section("Font", font_card))
                             .child(section("Cursor", cursor_card)),
@@ -891,7 +891,7 @@ impl Render for SettingsView {
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .gap_6()
+                            .gap_4()
                             .child(section("Window", window_card))
                             .child(section("Behavior", behavior_card))
                             .child(section("Scrollback", scrollback_card)),
@@ -961,10 +961,10 @@ fn section(title: &'static str, card: impl IntoElement) -> impl IntoElement {
         .w_full()
         .flex()
         .flex_col()
-        .gap_2()
+        .gap_1p5()
         .child(
             div()
-                .text_sm()
+                .text_size(rems(12. / 16.))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(rgb(LABEL_COLOR))
                 .child(title),
@@ -985,7 +985,7 @@ fn card(rows: Vec<impl IntoElement>) -> impl IntoElement {
         .border_color(rgb(CARD_BORDER));
     let last = rows.len().saturating_sub(1);
     for (ix, row) in rows.into_iter().enumerate() {
-        let mut cell = div().px_4().py_3().child(row);
+        let mut cell = div().px_3().py_2().child(row);
         if ix != last {
             cell = cell.border_b_1().border_color(rgb(CARD_BORDER));
         }
@@ -1007,11 +1007,11 @@ fn setting_row(
         .flex()
         .flex_col()
         .gap_1()
-        .child(div().text_sm().text_color(rgb(LABEL_COLOR)).child(title));
+        .child(div().text_size(rems(12. / 16.)).text_color(rgb(LABEL_COLOR)).child(title));
     if let Some(description) = description {
         text_col = text_col.child(
             div()
-                .text_xs()
+                .text_size(rems(11. / 16.))
                 .text_color(rgb(HINT_COLOR))
                 .child(description),
         );
@@ -1051,7 +1051,7 @@ fn text_field(
         } else {
             FIELD_BORDER
         }))
-        .text_sm()
+        .text_size(rems(12. / 16.))
         .text_color(rgb(LABEL_COLOR))
         .child(value)
         // Edits only ever happen at the end of the buffer (no mid-string
@@ -1099,7 +1099,7 @@ fn import_theme_button(nav: Nav, cx: &mut Context<SettingsView>) -> impl IntoEle
             FIELD_BORDER
         }))
         .bg(rgb(FIELD_BG))
-        .text_sm()
+        .text_size(rems(12. / 16.))
         .text_color(rgb(LABEL_COLOR))
         .cursor_pointer()
         .hover(|s| s.bg(rgb(CARD_BORDER)))
@@ -1243,12 +1243,12 @@ fn dropdown(
             FIELD_BORDER
         }))
         .cursor_pointer()
-        .text_sm()
+        .text_size(rems(12. / 16.))
         .text_color(rgb(LABEL_COLOR))
         .child(current_label)
         .child(
             div()
-                .text_xs()
+                .text_size(rems(11. / 16.))
                 .text_color(rgb(HINT_COLOR))
                 .child(if is_open { "▲" } else { "▼" }),
         )
@@ -1287,7 +1287,7 @@ fn dropdown(
             let mut item = div()
                 .px_2()
                 .py_1()
-                .text_sm()
+                .text_size(rems(12. / 16.))
                 .cursor_pointer()
                 .when(is_selected, |d| {
                     d.bg(rgb(ACCENT)).text_color(rgb(0xffffff))
@@ -1405,7 +1405,7 @@ fn radio_group<T: Clone + 'static>(
                 )
                 .child(
                     div()
-                        .text_sm()
+                        .text_size(rems(12. / 16.))
                         .text_color(rgb(LABEL_COLOR))
                         .child(label),
                 )
