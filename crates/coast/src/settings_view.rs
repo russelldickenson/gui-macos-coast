@@ -78,12 +78,13 @@ enum FocusSlot {
     Rows,
     Scrollback,
     ConfirmClose,
+    TabActivity,
     Breadcrumb,
     BreadcrumbTheme,
 }
 
 impl FocusSlot {
-    const ORDER: [FocusSlot; 16] = [
+    const ORDER: [FocusSlot; 17] = [
         FocusSlot::Theme,
         FocusSlot::Import,
         FocusSlot::Chrome,
@@ -98,6 +99,7 @@ impl FocusSlot {
         FocusSlot::Rows,
         FocusSlot::Scrollback,
         FocusSlot::ConfirmClose,
+        FocusSlot::TabActivity,
         FocusSlot::Breadcrumb,
         FocusSlot::BreadcrumbTheme,
     ];
@@ -138,6 +140,7 @@ impl FocusSlot {
             FocusSlot::Rows => &view.rows_field.focus,
             FocusSlot::Scrollback => &view.scrollback_field.focus,
             FocusSlot::ConfirmClose => &view.confirm_close_focus,
+            FocusSlot::TabActivity => &view.tab_activity_focus,
             FocusSlot::Breadcrumb => &view.breadcrumb_focus,
             FocusSlot::BreadcrumbTheme => &view.breadcrumb_theme_focus,
         }
@@ -269,6 +272,7 @@ pub struct SettingsView {
     line_spacing_focus: FocusHandle,
     ui_zoom_focus: FocusHandle,
     confirm_close_focus: FocusHandle,
+    tab_activity_focus: FocusHandle,
     breadcrumb_focus: FocusHandle,
     breadcrumb_theme_focus: FocusHandle,
     cols_field: TextField,
@@ -323,6 +327,7 @@ impl SettingsView {
             line_spacing_focus: cx.focus_handle(),
             ui_zoom_focus: cx.focus_handle(),
             confirm_close_focus: cx.focus_handle(),
+            tab_activity_focus: cx.focus_handle(),
             breadcrumb_focus: cx.focus_handle(),
             breadcrumb_theme_focus: cx.focus_handle(),
             cols_field: TextField::new(cx),
@@ -836,6 +841,20 @@ impl Render for SettingsView {
                     FocusSlot::ConfirmClose.nav(self, window),
                     |this, _window, cx| {
                         this.settings.confirm_close_tab = !this.settings.confirm_close_tab;
+                        this.commit(cx);
+                    },
+                    cx,
+                )
+                .into_any_element(),
+            ),
+            setting_row(
+                "Tab activity",
+                Some("Show the running process in the active tab's title, and a dot on inactive tabs with a command running."),
+                toggle_switch(
+                    self.settings.show_tab_activity,
+                    FocusSlot::TabActivity.nav(self, window),
+                    |this, _window, cx| {
+                        this.settings.show_tab_activity = !this.settings.show_tab_activity;
                         this.commit(cx);
                     },
                     cx,

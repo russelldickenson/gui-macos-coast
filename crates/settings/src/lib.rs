@@ -15,6 +15,7 @@
 //! default_rows = 30
 //! confirm_close_tab = true
 //! show_breadcrumb = false
+//! show_tab_activity = true
 //! cursor_color = "#ff9900" # omit to use the theme's own cursor color
 //! ```
 
@@ -80,6 +81,10 @@ fn default_show_breadcrumb() -> bool {
     false
 }
 
+fn default_show_tab_activity() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_font_family")]
@@ -117,6 +122,10 @@ pub struct Settings {
     /// clicking through to a parent directory or a subdirectory.
     #[serde(default = "default_show_breadcrumb")]
     pub show_breadcrumb: bool,
+    /// Show the running process in the active tab's title ("folder · proc")
+    /// and a dot on inactive tabs that have a command running.
+    #[serde(default = "default_show_tab_activity")]
+    pub show_tab_activity: bool,
     /// Override the active theme's cursor color, as `#rrggbb`. `None` uses
     /// the theme's own cursor color.
     #[serde(default)]
@@ -143,6 +152,7 @@ impl Default for Settings {
             default_rows: default_rows(),
             confirm_close_tab: default_confirm_close_tab(),
             show_breadcrumb: default_show_breadcrumb(),
+            show_tab_activity: default_show_tab_activity(),
             cursor_color: None,
             breadcrumb_theme: default_breadcrumb_theme(),
         }

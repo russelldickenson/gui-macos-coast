@@ -36,9 +36,9 @@ enum TabKind {
 }
 
 impl TabKind {
-    fn title(&self, cx: &App) -> String {
+    fn title(&self, cx: &App, show_activity: bool) -> String {
         match self {
-            TabKind::Terminal(view) => view.read(cx).title(),
+            TabKind::Terminal(view) => view.read(cx).title(show_activity),
             TabKind::Settings(_) => "Settings".to_string(),
         }
     }
@@ -652,6 +652,7 @@ impl Render for Workspace {
         let chrome_inactive_tab = crate::colors::hsla(self.chrome.inactive_tab);
         let chrome_inactive_tab_text = crate::colors::hsla(self.chrome.inactive_tab_text);
         let chrome_hover = crate::colors::hsla(self.chrome.hover);
+        let show_activity = self.settings.show_tab_activity;
         let chrome_busy_dot = crate::colors::hsla(self.chrome.busy_dot);
         let chrome_separator = crate::colors::hsla(self.chrome.separator);
 
@@ -708,9 +709,9 @@ impl Render for Workspace {
             .track_scroll(&self.tab_scroll_handle);
 
         for (ix, tab) in self.tabs.iter().enumerate() {
-            let title = SharedString::new(tab.kind.title(cx));
+            let title = SharedString::new(tab.kind.title(cx, show_activity));
             let is_active = ix == active;
-            let show_busy_dot = !is_active && tab.kind.busy(cx);
+            let show_busy_dot = show_activity && !is_active && tab.kind.busy(cx);
             tabs_row = tabs_row.child(
                 div()
                     .flex()
@@ -746,16 +747,28 @@ impl Render for Workspace {
                         chrome_inactive_tab_text
                     })
                     .text_size(px(12. * z))
-                    .when(show_busy_dot, |d| {
-                        d.child(
-                            div()
-                                .flex_none()
-                                .size(px(6. * z))
-                                .rounded_full()
-                                .bg(chrome_busy_dot),
-                        )
-                    })
-                    .child(div().flex_1().truncate().child(title))
+                    // The folder stays left-anchored in every state; the
+                    // busy dot (inactive tabs) sits after it, where the
+                    // active tab shows " · process".
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(6. * z))
+                            .child(div().min_w_0().truncate().child(title))
+                            .when(show_busy_dot, |d| {
+                                d.child(
+                                    div()
+                                        .flex_none()
+                                        .size(px(6. * z))
+                                        .rounded_full()
+                                        .bg(chrome_busy_dot),
+                                )
+                            }),
+                    )
                     .child(
                         div()
                             .size(px(20. * z))

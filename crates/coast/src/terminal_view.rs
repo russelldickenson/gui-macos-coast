@@ -191,9 +191,9 @@ impl TerminalView {
     /// The tab label: the leaf name of the tab's current directory (`~`
     /// for home), falling back to "Coast" before the first cwd poll
     /// completes or if it can't be resolved.
-    pub fn title(&self) -> String {
+    pub fn title(&self, show_activity: bool) -> String {
         let folder = self.folder_title();
-        match (&self.fg_name, self.is_active) {
+        match (&self.fg_name, self.is_active && show_activity) {
             (Some(name), true) => format!("{folder} · {name}"),
             _ => folder,
         }
