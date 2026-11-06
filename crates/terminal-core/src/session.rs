@@ -297,6 +297,16 @@ impl Session {
         }
     }
 
+    /// The executable name of the foreground process when it isn't the
+    /// idle shell (e.g. "vim", "cargo"); `None` at the prompt or if the name
+    /// can't be read.
+    pub fn foreground_process_name(&self) -> Option<String> {
+        if !self.has_foreground_process() {
+            return None;
+        }
+        proc_name(self.foreground_pid()?)
+    }
+
     /// The current working directory of whichever process is in the
     /// foreground (the running command if there is one, otherwise the
     /// shell itself) — drives the directory breadcrumb. `None` if it can't
@@ -504,6 +514,17 @@ fn proc_cwd(pid: libc::pid_t) -> Option<std::path::PathBuf> {
         return None;
     }
     Some(std::path::PathBuf::from(std::str::from_utf8(&path_bytes[..end]).ok()?))
+}
+
+/// A process's short executable name via `proc_name`.
+fn proc_name(pid: libc::pid_t) -> Option<String> {
+    let mut buf = [0u8; 256];
+    let n = unsafe { libc::proc_name(pid, buf.as_mut_ptr() as *mut libc::c_void, buf.len() as u32) };
+    if n <= 0 {
+        return None;
+    }
+    let name = std::str::from_utf8(&buf[..n as usize]).ok()?.trim();
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 #[cfg(test)]

@@ -43,6 +43,13 @@ impl TabKind {
         }
     }
 
+    fn busy(&self, cx: &App) -> bool {
+        match self {
+            TabKind::Terminal(view) => view.read(cx).busy(),
+            TabKind::Settings(_) => false,
+        }
+    }
+
     fn exited(&self, cx: &App) -> Option<i32> {
         match self {
             TabKind::Terminal(view) => view.read(cx).exited(),
@@ -645,6 +652,7 @@ impl Render for Workspace {
         let chrome_inactive_tab = crate::colors::hsla(self.chrome.inactive_tab);
         let chrome_inactive_tab_text = crate::colors::hsla(self.chrome.inactive_tab_text);
         let chrome_hover = crate::colors::hsla(self.chrome.hover);
+        let chrome_busy_dot = crate::colors::hsla(self.chrome.busy_dot);
         let chrome_separator = crate::colors::hsla(self.chrome.separator);
 
         let z = self.settings.zoom();
@@ -702,6 +710,7 @@ impl Render for Workspace {
         for (ix, tab) in self.tabs.iter().enumerate() {
             let title = SharedString::new(tab.kind.title(cx));
             let is_active = ix == active;
+            let show_busy_dot = !is_active && tab.kind.busy(cx);
             tabs_row = tabs_row.child(
                 div()
                     .flex()
@@ -737,6 +746,15 @@ impl Render for Workspace {
                         chrome_inactive_tab_text
                     })
                     .text_size(px(12. * z))
+                    .when(show_busy_dot, |d| {
+                        d.child(
+                            div()
+                                .flex_none()
+                                .size(px(6. * z))
+                                .rounded_full()
+                                .bg(chrome_busy_dot),
+                        )
+                    })
                     .child(div().flex_1().truncate().child(title))
                     .child(
                         div()

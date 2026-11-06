@@ -39,6 +39,14 @@ pub struct ChromeTheme {
     pub hover: Color,
     /// Hairline dividers (under the bar, around the active tab).
     pub separator: Color,
+    /// The "process running" dot on inactive tabs. Optional in user theme
+    /// TOML files (defaults to blue).
+    #[serde(default = "default_busy_dot")]
+    pub busy_dot: Color,
+}
+
+fn default_busy_dot() -> Color {
+    c!("#3b78ff")
 }
 
 impl ChromeTheme {
@@ -64,6 +72,7 @@ pub fn light() -> ChromeTheme {
         inactive_tab_text: c!("#6e6e73"),
         hover: c!("#dedede"),
         separator: c!("#d0d0d0"),
+        busy_dot: c!("#3b78ff"),
     }
 }
 
@@ -77,6 +86,7 @@ pub fn dark_gray() -> ChromeTheme {
         inactive_tab_text: c!("#d7d7d7"),
         hover: c!("#4c566a"),
         separator: c!("#4a4a4a"),
+        busy_dot: c!("#7aa2f7"),
     }
 }
 

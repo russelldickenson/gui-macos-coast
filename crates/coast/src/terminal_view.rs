@@ -97,6 +97,12 @@ pub struct TerminalView {
     /// directory, refreshed periodically while `show_breadcrumb` is on.
     current_dir: Option<std::path::PathBuf>,
     last_cwd_check: Instant,
+    /// Whether a non-shell process owns the foreground (drives the tab's
+    /// busy dot). Polled for every tab since it's just a `tcgetpgrp`.
+    busy: bool,
+    /// Name of that process, polled only while this tab is active.
+    fg_name: Option<String>,
+    last_busy_check: Instant,
     /// Whether the breadcrumb's subdirectory list is currently open.
     breadcrumb_open: bool,
     /// The tab's content width as of the last paint, used to decide how
@@ -166,6 +172,9 @@ impl TerminalView {
             breadcrumb_theme,
             current_dir: session_dir,
             last_cwd_check: Instant::now() - CWD_POLL_INTERVAL,
+            busy: false,
+            fg_name: None,
+            last_busy_check: Instant::now() - CWD_POLL_INTERVAL,
             breadcrumb_open: false,
             content_width: px(2000.),
             is_active: true,
@@ -183,6 +192,19 @@ impl TerminalView {
     /// for home), falling back to "Coast" before the first cwd poll
     /// completes or if it can't be resolved.
     pub fn title(&self) -> String {
+        let folder = self.folder_title();
+        match (&self.fg_name, self.is_active) {
+            (Some(name), true) => format!("{folder} · {name}"),
+            _ => folder,
+        }
+    }
+
+    /// Whether a non-shell process is running in the foreground.
+    pub fn busy(&self) -> bool {
+        self.busy
+    }
+
+    fn folder_title(&self) -> String {
         match &self.current_dir {
             Some(dir) => {
                 let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
@@ -251,6 +273,7 @@ impl TerminalView {
         self.is_active = active;
         if active {
             self.last_cwd_check = Instant::now() - CWD_POLL_INTERVAL;
+            self.last_busy_check = Instant::now() - CWD_POLL_INTERVAL;
             self.last_blink = Instant::now();
             self.cursor_visible = true;
         }
@@ -388,6 +411,23 @@ impl TerminalView {
         if !self.is_active && self.current_dir.is_none() {
             self.current_dir = self.session.current_dir();
             dirty |= self.current_dir.is_some();
+        }
+        // Busy state is polled for every tab (one cheap `tcgetpgrp`) so
+        // an inactive tab can show its busy dot; the process name (a
+        // further syscall) only for the active tab, which shows it.
+        if self.last_busy_check.elapsed() >= CWD_POLL_INTERVAL {
+            self.last_busy_check = Instant::now();
+            let busy = self.session.has_foreground_process();
+            let name = if busy && self.is_active {
+                self.session.foreground_process_name()
+            } else {
+                None
+            };
+            if busy != self.busy || name != self.fg_name {
+                self.busy = busy;
+                self.fg_name = name;
+                dirty = true;
+            }
         }
         if self.is_active {
             if self.cursor_blink && self.last_blink.elapsed() >= BLINK_INTERVAL {
