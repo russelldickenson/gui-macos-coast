@@ -113,6 +113,9 @@ pub struct Session {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     child: Arc<Mutex<Option<Box<dyn Child + Send + Sync>>>>,
+    /// The shell's pid, captured at spawn: the exit-watcher thread takes
+    /// `child` out of its mutex to `wait()` on it, so it can't be asked later.
+    shell_pid: Option<libc::pid_t>,
     events: Mutex<mpsc::Receiver<SessionEvent>>,
     dims: Mutex<(u16, u16)>,
 }
@@ -193,6 +196,7 @@ impl Session {
             })?;
 
         // Child exit watcher.
+        let shell_pid = child.process_id().map(|pid| pid as libc::pid_t);
         let child: Arc<Mutex<Option<Box<dyn Child + Send + Sync>>>> =
             Arc::new(Mutex::new(Some(child)));
         let wait_child = child.clone();
@@ -214,6 +218,7 @@ impl Session {
             writer,
             master: Mutex::new(pair.master),
             child,
+            shell_pid,
             events: Mutex::new(events),
             dims: Mutex::new((opts.cols, opts.rows)),
         })
@@ -269,11 +274,7 @@ impl Session {
 
     /// The shell's own pid (the direct child spawned into the PTY).
     fn shell_pid(&self) -> Option<libc::pid_t> {
-        self.child
-            .lock()
-            .ok()
-            .and_then(|guard| guard.as_ref().and_then(|child| child.process_id()))
-            .map(|pid| pid as libc::pid_t)
+        self.shell_pid
     }
 
     /// The pid of whichever process currently owns the PTY's foreground
@@ -632,6 +633,33 @@ mod tests {
         assert_eq!(seen, Some(tmp.clone()), "current_dir never reported {tmp:?}");
 
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn foreground_process_detected_while_command_runs() {
+        let session = Session::spawn(SpawnOptions {
+            shell: "/bin/sh".to_string(),
+            args: vec![],
+            cols: 80,
+            rows: 24,
+            scrollback: 1000,
+            cursor_shape: CursorShape::Block,
+            cwd: None,
+        })
+        .expect("spawn session");
+        assert!(!session.has_foreground_process());
+
+        session.write(b"sleep 5\n").expect("write to pty");
+        let mut name = None;
+        for _ in 0..50 {
+            while session.try_recv_event().is_some() {}
+            if session.has_foreground_process() {
+                name = session.foreground_process_name();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert_eq!(name.as_deref(), Some("sleep"));
     }
 
     #[test]
