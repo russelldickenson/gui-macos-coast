@@ -491,18 +491,68 @@ impl Focusable for SettingsView {
     }
 }
 
-// Page chrome: a light gray canvas with white cards, similar to a native
+// Page chrome: a canvas with cards, themed from the terminal color theme (similar to a native
 // macOS preferences pane.
-const PAGE_BG: u32 = 0xeef0f4;
-const CARD_BG: u32 = 0xfbfbfc;
-const CARD_BORDER: u32 = 0xe2e4e9;
-const TITLE_COLOR: u32 = 0x1c1c1e;
-const LABEL_COLOR: u32 = 0x3c3c43;
-const HINT_COLOR: u32 = 0x8e8e93;
-const FIELD_BG: u32 = 0xf5f5f5;
-const FIELD_BORDER: u32 = 0xd0d0d0;
-const FIELD_BORDER_FOCUSED: u32 = 0x3b78ff;
 const ACCENT: u32 = 0x3b78ff;
+
+/// Settings-page colors, derived from the active terminal color theme so
+/// the page follows "Color theme" (light themes give a light page, dark a
+/// dark one).
+#[derive(Clone, Copy)]
+struct Palette {
+    page_bg: u32,
+    card_bg: u32,
+    card_border: u32,
+    title: u32,
+    label: u32,
+    hint: u32,
+    field_bg: u32,
+    field_border: u32,
+    popup_bg: u32,
+}
+
+impl Palette {
+    fn from_theme(theme: &coast_themes::Theme) -> Self {
+        let (bg, fg) = (theme.background, theme.foreground);
+        let mix = |a: coast_themes::Color, b: coast_themes::Color, t: f32| {
+            let ch = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u32;
+            (ch(a.r, b.r) << 16) | (ch(a.g, b.g) << 8) | ch(a.b, b.b)
+        };
+        Self {
+            page_bg: bg.rgb(),
+            card_bg: mix(bg, fg, 0.06),
+            card_border: mix(bg, fg, 0.14),
+            title: fg.rgb(),
+            label: mix(fg, bg, 0.15),
+            hint: mix(fg, bg, 0.5),
+            field_bg: mix(bg, fg, 0.10),
+            field_border: mix(bg, fg, 0.25),
+            popup_bg: mix(bg, fg, 0.08),
+        }
+    }
+}
+
+thread_local! {
+    static PALETTE: std::cell::Cell<Palette> = const {
+        std::cell::Cell::new(Palette {
+            page_bg: 0xeef0f4,
+            card_bg: 0xfbfbfc,
+            card_border: 0xe2e4e9,
+            title: 0x1c1c1e,
+            label: 0x3c3c43,
+            hint: 0x8e8e93,
+            field_bg: 0xf5f5f5,
+            field_border: 0xd0d0d0,
+            popup_bg: 0xffffff,
+        })
+    };
+}
+
+/// The palette for the render in progress (set at the top of `render`).
+fn pal() -> Palette {
+    PALETTE.with(|p| p.get())
+}
+
 
 fn format_f32(v: f32) -> String {
     // Trim ".0" for whole numbers, otherwise keep one decimal place.
@@ -515,6 +565,7 @@ fn format_f32(v: f32) -> String {
 
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        PALETTE.with(|p| p.set(Palette::from_theme(&self.settings.theme())));
         let focused_field = |focus: &FocusHandle| focus.is_focused(window);
 
         let appearance_card = card(vec![
@@ -648,7 +699,7 @@ impl Render for SettingsView {
                             .rounded_md()
                             .cursor_pointer()
                             .border_1()
-                            .border_color(rgb(FIELD_BORDER))
+                            .border_color(rgb(pal().field_border))
                             .bg(rgb(self.settings.theme().cursor.rgb()))
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -834,7 +885,7 @@ impl Render for SettingsView {
             .track_focus(&self.focus_handle(cx))
             .track_scroll(&self.scroll_handle)
             .size_full()
-            .bg(rgb(PAGE_BG))
+            .bg(rgb(pal().page_bg))
             .p_4()
             .flex()
             .flex_col()
@@ -855,7 +906,7 @@ impl Render for SettingsView {
                                 div()
                                     .text_size(rems(18. / 16.))
                                     .font_weight(FontWeight::BOLD)
-                                    .text_color(rgb(TITLE_COLOR))
+                                    .text_color(rgb(pal().title))
                                     .child("Settings"),
                             ),
                     )
@@ -950,7 +1001,7 @@ fn settings_scrollbar(handle: &ScrollHandle) -> impl IntoElement {
                 .min_h(rems(24. / 16.))
                 .mx(rems(2. / 16.))
                 .rounded_full()
-                .bg(rgb(FIELD_BORDER)),
+                .bg(rgb(pal().field_border)),
         )
         .child(spacer(below))
 }
@@ -966,7 +1017,7 @@ fn section(title: &'static str, card: impl IntoElement) -> impl IntoElement {
             div()
                 .text_size(rems(12. / 16.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(LABEL_COLOR))
+                .text_color(rgb(pal().label))
                 .child(title),
         )
         .child(card)
@@ -980,14 +1031,14 @@ fn card(rows: Vec<impl IntoElement>) -> impl IntoElement {
         .flex()
         .flex_col()
         .rounded_lg()
-        .bg(rgb(CARD_BG))
+        .bg(rgb(pal().card_bg))
         .border_1()
-        .border_color(rgb(CARD_BORDER));
+        .border_color(rgb(pal().card_border));
     let last = rows.len().saturating_sub(1);
     for (ix, row) in rows.into_iter().enumerate() {
         let mut cell = div().px_3().py_2().child(row);
         if ix != last {
-            cell = cell.border_b_1().border_color(rgb(CARD_BORDER));
+            cell = cell.border_b_1().border_color(rgb(pal().card_border));
         }
         container = container.child(cell);
     }
@@ -1007,12 +1058,12 @@ fn setting_row(
         .flex()
         .flex_col()
         .gap_1()
-        .child(div().text_size(rems(12. / 16.)).text_color(rgb(LABEL_COLOR)).child(title));
+        .child(div().text_size(rems(12. / 16.)).text_color(rgb(pal().label)).child(title));
     if let Some(description) = description {
         text_col = text_col.child(
             div()
                 .text_size(rems(11. / 16.))
-                .text_color(rgb(HINT_COLOR))
+                .text_color(rgb(pal().hint))
                 .child(description),
         );
     }
@@ -1044,15 +1095,15 @@ fn text_field(
         .px_2()
         .py_1()
         .rounded_md()
-        .bg(rgb(FIELD_BG))
+        .bg(rgb(pal().field_bg))
         .border_1()
         .border_color(rgb(if is_focused {
-            FIELD_BORDER_FOCUSED
+            ACCENT
         } else {
-            FIELD_BORDER
+            pal().field_border
         }))
         .text_size(rems(12. / 16.))
-        .text_color(rgb(LABEL_COLOR))
+        .text_color(rgb(pal().label))
         .child(value)
         // Edits only ever happen at the end of the buffer (no mid-string
         // cursor positioning), so the caret always belongs right after it.
@@ -1062,7 +1113,7 @@ fn text_field(
                     .w(rems(1. / 16.))
                     .h(rems(14. / 16.))
                     .ml(rems(1. / 16.))
-                    .bg(rgb(FIELD_BORDER_FOCUSED)),
+                    .bg(rgb(ACCENT)),
             )
         })
         .on_mouse_down(MouseButton::Left, {
@@ -1094,15 +1145,15 @@ fn import_theme_button(nav: Nav, cx: &mut Context<SettingsView>) -> impl IntoEle
         .rounded_md()
         .border_1()
         .border_color(rgb(if nav.is_focused {
-            FIELD_BORDER_FOCUSED
+            ACCENT
         } else {
-            FIELD_BORDER
+            pal().field_border
         }))
-        .bg(rgb(FIELD_BG))
+        .bg(rgb(pal().field_bg))
         .text_size(rems(12. / 16.))
-        .text_color(rgb(LABEL_COLOR))
+        .text_color(rgb(pal().label))
         .cursor_pointer()
-        .hover(|s| s.bg(rgb(CARD_BORDER)))
+        .hover(|s| s.bg(rgb(pal().card_border)))
         .child("Import\u{2026}")
         .on_mouse_down(
             MouseButton::Left,
@@ -1137,7 +1188,7 @@ fn toggle_switch(
         .h(rems(20. / 16.))
         .rounded_full()
         .p(rems(2. / 16.))
-        .bg(rgb(if is_on { ACCENT } else { 0xe4e4e6 }))
+        .bg(rgb(if is_on { ACCENT } else { pal().field_border }))
         .flex()
         .flex_row()
         .cursor_pointer()
@@ -1235,21 +1286,21 @@ fn dropdown(
         .px_2()
         .py_1()
         .rounded_md()
-        .bg(rgb(FIELD_BG))
+        .bg(rgb(pal().field_bg))
         .border_1()
         .border_color(rgb(if nav.is_focused {
-            FIELD_BORDER_FOCUSED
+            ACCENT
         } else {
-            FIELD_BORDER
+            pal().field_border
         }))
         .cursor_pointer()
         .text_size(rems(12. / 16.))
-        .text_color(rgb(LABEL_COLOR))
+        .text_color(rgb(pal().label))
         .child(current_label)
         .child(
             div()
                 .text_size(rems(11. / 16.))
-                .text_color(rgb(HINT_COLOR))
+                .text_color(rgb(pal().hint))
                 .child(if is_open { "▲" } else { "▼" }),
         )
         .on_mouse_down(
@@ -1271,9 +1322,9 @@ fn dropdown(
             .flex()
             .flex_col()
             .rounded_md()
-            .bg(rgb(0xffffff))
+            .bg(rgb(pal().popup_bg))
             .border_1()
-            .border_color(rgb(FIELD_BORDER))
+            .border_color(rgb(pal().field_border))
             .shadow_md()
             .overflow_hidden();
         let last = options.len().saturating_sub(1);
@@ -1293,11 +1344,11 @@ fn dropdown(
                     d.bg(rgb(ACCENT)).text_color(rgb(0xffffff))
                 })
                 .when(!is_selected && is_highlighted, |d| {
-                    d.text_color(rgb(LABEL_COLOR)).bg(rgb(FIELD_BG))
+                    d.text_color(rgb(pal().label)).bg(rgb(pal().field_bg))
                 })
                 .when(!is_selected && !is_highlighted, |d| {
-                    d.text_color(rgb(LABEL_COLOR))
-                        .hover(|s| s.bg(rgb(FIELD_BG)))
+                    d.text_color(rgb(pal().label))
+                        .hover(|s| s.bg(rgb(pal().field_bg)))
                 })
                 .child(label)
                 .on_mouse_down(
@@ -1309,7 +1360,7 @@ fn dropdown(
                     }),
                 );
             if ix != last {
-                item = item.border_b_1().border_color(rgb(CARD_BORDER));
+                item = item.border_b_1().border_color(rgb(pal().card_border));
             }
             list = list.child(item);
         }
@@ -1369,7 +1420,7 @@ fn radio_group<T: Clone + 'static>(
         .p_1()
         .border_1()
         .border_color(if nav.is_focused {
-            Hsla::from(rgb(FIELD_BORDER_FOCUSED))
+            Hsla::from(rgb(ACCENT))
         } else {
             Hsla::transparent_black()
         })
@@ -1395,7 +1446,7 @@ fn radio_group<T: Clone + 'static>(
                         .size(rems(14. / 16.))
                         .rounded_full()
                         .border_1()
-                        .border_color(rgb(if is_selected { ACCENT } else { FIELD_BORDER }))
+                        .border_color(rgb(if is_selected { ACCENT } else { pal().field_border }))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -1406,7 +1457,7 @@ fn radio_group<T: Clone + 'static>(
                 .child(
                     div()
                         .text_size(rems(12. / 16.))
-                        .text_color(rgb(LABEL_COLOR))
+                        .text_color(rgb(pal().label))
                         .child(label),
                 )
                 .on_mouse_down(
