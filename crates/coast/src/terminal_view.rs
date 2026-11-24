@@ -14,11 +14,12 @@ use gpui::{
     anchored, deferred, fill, point, prelude::*, px, relative, svg, App, Bounds, Context, Element,
     ElementId, Entity, EventEmitter, FocusHandle, Focusable, Font, FontStyle, FontWeight,
     GlobalElementId, Hsla, InspectorElementId, IntoElement, KeyDownEvent, Keystroke, LayoutId,
-    ClipboardItem, MouseButton, MouseDownEvent, MouseMoveEvent, PaintQuad, Pixels, Point, ScrollWheelEvent, ShapedLine, SharedString, Size,
-    StrikethroughStyle, Style, TextRun, UnderlineStyle, Window,
+    ClipboardItem, MouseButton, MouseDownEvent, MouseMoveEvent, PaintQuad, Pixels, Point,
+    ScrollWheelEvent, ShapedLine, SharedString, Size, StrikethroughStyle, Style, TextRun,
+    UnderlineStyle, Window,
 };
 
-use crate::colors;
+use crate::{colors, native_menu};
 use terminal_core::{SelectionKind, Session, SessionEvent};
 
 const BLINK_INTERVAL: Duration = Duration::from_millis(530);
@@ -127,8 +128,6 @@ pub struct TerminalView {
     grid_origin: Point<Pixels>,
     /// Whether a left-button drag-selection is in progress.
     selecting: bool,
-    /// Window position of the open right-click menu, if any.
-    context_menu: Option<Point<Pixels>>,
     /// Multiplier for the breadcrumb bar's sizing (see `Settings::zoom`).
     ui_zoom: f32,
 }
@@ -181,7 +180,6 @@ impl TerminalView {
             subdirs_cache: None,
             grid_origin: point(px(0.), px(0.)),
             selecting: false,
-            context_menu: None,
             ui_zoom: 1.0,
         };
         this.spawn_poll(cx);
@@ -374,6 +372,15 @@ impl TerminalView {
 
     fn poll(&mut self, cx: &mut Context<Self>) {
         let mut dirty = false;
+        // A native menu choice arrives after AppKit's modal loop has closed;
+        // act on it here, where gpui isn't borrowing its App for an event.
+        if let Some(choice) = native_menu::take(cx.entity_id().as_u64()) {
+            match choice {
+                native_menu::Choice::Copy => self.copy_selection(cx),
+                native_menu::Choice::Paste => self.paste_clipboard(cx),
+            }
+            dirty = true;
+        }
         let mut wakeups = 0;
         while let Some(event) = self.session.try_recv_event() {
             dirty = true;
@@ -519,86 +526,6 @@ impl Focusable for TerminalView {
     }
 }
 
-impl TerminalView {
-    /// The right-click menu: "Copy" when text is selected, "Paste" when the
-    /// clipboard holds text.
-    fn render_context_menu(&self, position: Point<Pixels>, cx: &mut Context<Self>) -> impl IntoElement {
-        // Opposite brightness to the breadcrumb bar so the menu stands out
-        // from the terminal background.
-        let theme = self.breadcrumb_theme.opposite();
-        let (bg, border, hover, text) = (
-            colors::hsla(theme.pill),
-            colors::hsla(theme.pill_border),
-            colors::hsla(theme.pill_hover),
-            colors::hsla(theme.text),
-        );
-        let can_copy = self.session.selection_text().is_some();
-        let can_paste = cx.read_from_clipboard().is_some_and(|i| i.text().is_some());
-
-        let item = |id: &'static str, icon: &'static str, label: &'static str, first: bool| {
-            let mut el = gpui::div()
-                .id(id)
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .px_3()
-                .py_1()
-                .text_sm()
-                .text_color(text)
-                .cursor_pointer()
-                .hover(move |s| s.bg(hover))
-                .child(svg().path(icon).size(px(14.)).text_color(text))
-                .child(label);
-            if !first {
-                el = el.border_t_1().border_color(border);
-            }
-            el
-        };
-
-        let mut list = gpui::div()
-            .id("terminal-context-menu")
-            .min_w(px(120.))
-            .flex()
-            .flex_col()
-            .rounded_md()
-            .bg(bg)
-            .border_1()
-            .border_color(border)
-            .shadow_md()
-            .occlude()
-            .on_mouse_down_out(cx.listener(|view, _, _window, cx| {
-                view.context_menu = None;
-                cx.notify();
-            }));
-        if can_copy {
-            list = list.child(item("ctx-copy", "icons/copy.svg", "Copy", true).on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|view, _, _window, cx| {
-                    view.copy_selection(cx);
-                    view.context_menu = None;
-                    cx.notify();
-                }),
-            ));
-        }
-        if can_paste {
-            list = list.child(item("ctx-paste", "icons/paste.svg", "Paste", !can_copy).on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|view, _, _window, cx| {
-                    view.context_menu = None;
-                    view.paste_clipboard(cx);
-                }),
-            ));
-        }
-        deferred(
-            anchored()
-                .position(position)
-                .snap_to_window_with_margin(px(8.))
-                .child(list),
-        )
-    }
-}
-
 impl Render for TerminalView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let line_height = self.cell_size.height.max(px(1.));
@@ -618,17 +545,15 @@ impl Render for TerminalView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|view, event: &MouseDownEvent, _window, cx| {
-                    view.context_menu = None;
                     view.begin_selection(event, cx);
                 }),
             )
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(|view, event: &MouseDownEvent, _window, cx| {
+                cx.listener(|view, _: &MouseDownEvent, _window, cx| {
                     let can_copy = view.session.selection_text().is_some();
                     let can_paste = cx.read_from_clipboard().is_some_and(|i| i.text().is_some());
-                    view.context_menu = (can_copy || can_paste).then_some(event.position);
-                    cx.notify();
+                    native_menu::schedule(cx.entity_id().as_u64(), can_copy, can_paste);
                 }),
             )
             .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _window, cx| {
@@ -658,14 +583,12 @@ impl Render for TerminalView {
 
         let show_scrollbar = self.scrollbar_visible || self.scrollbar_hovered;
 
-        let menu = self.context_menu.map(|pos| self.render_context_menu(pos, cx));
         let terminal_area = gpui::div()
             .relative()
             .flex_1()
             .w_full()
             .child(content)
-            .child(scrollbar(&self.session, show_scrollbar, cx))
-            .children(menu);
+            .child(scrollbar(&self.session, show_scrollbar, cx));
 
         let breadcrumb_element = if self.show_breadcrumb {
             self.current_dir.clone().map(|dir| {

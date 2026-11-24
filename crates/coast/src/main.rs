@@ -5,6 +5,7 @@
 
 mod colors;
 mod keys;
+mod native_menu;
 mod settings_view;
 mod terminal_view;
 mod workspace;

@@ -745,9 +745,11 @@ dependencies = [
  "coast-themes",
  "core-foundation 0.10.0",
  "core-text",
+ "dispatch",
  "gpui",
  "objc2",
  "objc2-app-kit",
+ "objc2-foundation",
  "terminal-core",
  "toml 0.8.23",
 ]
@@ -1188,6 +1190,12 @@ dependencies = [
  "redox_users",
  "windows-sys 0.48.0",
 ]
+
+[[package]]
+name = "dispatch"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd0c93bb4b0c6d9b77f4435b0ae98c24d17f1c45b2ff844c6151a07256ca923b"
 
 [[package]]
 name = "dispatch2"
