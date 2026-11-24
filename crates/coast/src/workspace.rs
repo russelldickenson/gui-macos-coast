@@ -507,7 +507,7 @@ impl Workspace {
         // there is always double its index in `self.tabs`.
         let handle = &self.tab_scroll_handle;
         let viewport = handle.bounds();
-        let edge = TAB_EDGE_WIDTH * self.settings.zoom();
+        let edge = (TAB_EDGE_WIDTH + 8.0) * self.settings.zoom();
         let Some(item) = handle.bounds_for_item(active * 2) else {
             window.request_animation_frame();
             return;
@@ -522,10 +522,12 @@ impl Workspace {
         let left = f32::from(item.left() - viewport.left());
         let right = f32::from(item.right() - viewport.left());
         let mut scroll = -f32::from(handle.offset().x);
-        if left - scroll < edge {
-            scroll = left - edge;
-        } else if right - scroll > view_w - edge {
-            scroll = right - view_w + edge;
+        // Reserve space for edge overlays on both sides.
+        let edge_reserve = edge;
+        if left - scroll < edge_reserve {
+            scroll = left - edge_reserve;
+        } else if right - scroll > view_w - edge_reserve {
+            scroll = right - view_w + edge_reserve;
         }
         let scroll = scroll.clamp(0., f32::from(handle.max_offset().width).max(0.));
         handle.set_offset(point(px(-scroll), handle.offset().y));
