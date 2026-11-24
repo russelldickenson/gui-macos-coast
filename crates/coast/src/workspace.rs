@@ -784,7 +784,22 @@ impl Render for Workspace {
                             .hover(|s| {
                                 s.bg(chrome_hover).text_color(chrome_active_tab_text)
                             })
-                            .child(div().relative().top(px(-1.)).child("×"))
+                            .child(
+    div()
+        .size(px(20. * z))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_md()
+        .text_color(if is_active {
+            chrome_active_tab_text
+        } else {
+            chrome_inactive_tab_text
+        })
+        .hover(|s| s.bg(chrome_hover).text_color(chrome_active_tab_text))
+        .text_size(px(12. * z))
+        .line_height(px(20. * z))
+        .child("×"))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this: &mut Workspace, _, window, cx| {
@@ -853,20 +868,22 @@ impl Render for Workspace {
             a: chrome_bar.a * 0.9,
             ..chrome_bar
         };
+        // vertical offset to align chevron overlays within the tab strip (centered vertically)
+        let top_offset = (BAR_HEIGHT - TAB_HEIGHT) * z;
         if can_scroll_left {
             tabs_viewport = tabs_viewport.child(
                 div()
                     .absolute()
                     .left_0()
-                    .top_0()
-                    .h(bar_h)
-                    .w(px(TAB_EDGE_WIDTH * z))
+                    .top(px(top_offset))
+                    .h(tab_h)
+                    .w(px((TAB_EDGE_WIDTH + 8.0) * z))
                     .flex()
                     .items_center()
-                    .justify_start()
+                    .justify_center()
                     .bg(edge_fade(chrome_bar))
                     .text_color(chrome_inactive_tab_text)
-                    .text_size(px(12. * z))
+                    .text_size(px(16. * z))
                     .child("‹"),
             );
         }
@@ -875,15 +892,15 @@ impl Render for Workspace {
                 div()
                     .absolute()
                     .right_0()
-                    .top_0()
-                    .h(bar_h)
-                    .w(px(TAB_EDGE_WIDTH * z))
+                    .top(px(top_offset))
+                    .h(tab_h)
+                    .w(px((TAB_EDGE_WIDTH + 8.0) * z))
                     .flex()
                     .items_center()
-                    .justify_end()
+                    .justify_center()
                     .bg(edge_fade(chrome_bar))
                     .text_color(chrome_inactive_tab_text)
-                    .text_size(px(12. * z))
+                    .text_size(px(16. * z))
                     .child("›"),
             );
         }
