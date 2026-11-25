@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="360" viewBox="0 0 1200 360"
+     role="img" aria-labelledby="hero-title hero-desc">
+  <title id="hero-title">Coast — a Windows Terminal-style terminal for macOS</title>
+  <desc id="hero-desc">Coast name and value beside a simplified drawing of its tabbed terminal window, directory breadcrumb and prompt.</desc>
+
+  <defs>
+    <clipPath id="window-clip">
+      <rect x="660" y="54" width="480" height="252" rx="14"/>
+    </clipPath>
+  </defs>
+
+  <rect width="1200" height="360" rx="26" fill="#0c0d10"/>
+
+  <!-- Title block: category, name, concrete promise, metadata -->
+  <g id="title-block">
+    <text x="60" y="60" fill="#8b96a6" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="19" letter-spacing="2">macOS TERMINAL</text>
+    <text x="60" y="140" fill="#f3f6fa" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="78" font-weight="700">Coast</text>
+    <rect x="60" y="164" width="54" height="4" rx="2" fill="#3a96dd"/>
+    <text x="60" y="210" fill="#d5dde8" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="27">Windows Terminal-style tabs</text>
+    <text x="60" y="246" fill="#d5dde8" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="27">in a native macOS app.</text>
+    <text x="60" y="300" fill="#8b96a6" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18">gpui · alacritty_terminal · portable-pty</text>
+  </g>
+
+  <!-- Proof: the app's own interface language — tabs, breadcrumb, prompt -->
+  <g id="app-window">
+    <rect x="660" y="54" width="480" height="252" rx="14" fill="#171a20" stroke="#3b414d" stroke-width="2"/>
+    <g clip-path="url(#window-clip)">
+      <!-- Traffic lights and tab strip -->
+      <rect x="660" y="54" width="480" height="40" fill="#22252c"/>
+      <circle cx="686" cy="74" r="6" fill="#ff5f57"/>
+      <circle cx="708" cy="74" r="6" fill="#febc2e"/>
+      <circle cx="730" cy="74" r="6" fill="#28c840"/>
+      <rect x="756" y="54" width="126" height="40" fill="#2e3440"/>
+      <rect x="882" y="54" width="126" height="40" fill="#20232a"/>
+      <rect x="1008" y="54" width="132" height="40" fill="#20232a"/>
+      <text x="774" y="80" fill="#eef2f7" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="20" font-weight="600">coast</text>
+      <text x="900" y="80" fill="#98a2b2" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="19">zsh</text>
+      <text x="1026" y="80" fill="#98a2b2" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="19">build</text>
+
+      <!-- Directory breadcrumb -->
+      <rect x="660" y="94" width="480" height="34" fill="#2e3440"/>
+      <text x="682" y="117" fill="#d7d8e2" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="19">~/projects/coast</text>
+      <path d="M 1070 109 l 6 6 l 6 -6" fill="none" stroke="#9aa4b6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+      <!-- Terminal grid -->
+      <rect x="660" y="128" width="480" height="178" fill="#0c0c0c"/>
+      <text x="682" y="170" fill="#3a96dd" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="24">❯ cargo build -p coast</text>
+      <text x="682" y="212" fill="#9aa4b6" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="19">Compiling coast v0.1.0</text>
+      <text x="682" y="242" fill="#9aa4b6" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="19">Finished dev profile</text>
+      <rect x="682" y="268" width="10" height="22" fill="#3a96dd"/>
+    </g>
+  </g>
+</svg>

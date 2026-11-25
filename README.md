@@ -1,68 +1,79 @@
+<p align="center">
+  <img src="./assets/readme/hero.svg" width="100%" alt="Coast: Windows Terminal-style tabs in a native macOS terminal app">
+</p>
+
 # Coast
 
-A native macOS terminal emulator styled after Windows Terminal, built with
-[gpui](https://www.gpui.rs/) (Zed's UI framework), [alacritty_terminal](https://github.com/alacritty/alacritty)
-and [portable-pty](https://github.com/wez/wezterm).
-
-## What it is
-
-Coast is a from-scratch terminal emulator for macOS. It aims for the look
-and feel of Windows Terminal — a custom-drawn tab strip with a native menu
-bar and window chrome around it — rather than imitating Terminal.app or
-iTerm2.
+Coast is a native macOS terminal emulator with a Windows Terminal-style tab strip. It draws its own tabs and terminal grid with [gpui](https://www.gpui.rs/), uses [alacritty_terminal](https://github.com/alacritty/alacritty) for VT emulation, and [portable-pty](https://github.com/wez/wezterm) for the shell session.
 
 ## Features
 
-- **Windows Terminal-style tab strip** — custom-drawn tabs with dividers,
-  hover/active states, and light or dark titlebar themes
-- **Tab management** — new/close tabs, Ctrl-Tab / Ctrl-Shift-Tab cycling,
-  and a confirmation prompt before closing a tab that's the last one open
-  or has a foreground process running (so a stray Cmd-W can't kill a
-  running build or an SSH session)
-- **Color themes** — a set of built-in themes (Campbell, One Half Dark/Light,
-  Dracula, Tokyo Night, Catppuccin Mocha, Solarized Dark/Light), user
-  themes on disk, and the ability to import a macOS Terminal.app `.terminal`
-  theme file directly
-- **A full settings page** — a tab of its own, not a modal — covering font
-  family/size, cursor shape/blink/color (with a native color picker),
-  color theme, titlebar theme, default window size, scrollback length, and
-  the behaviors below. Every control is keyboard-accessible (Tab order,
-  arrow keys within radio groups and dropdowns)
-- **Directory breadcrumb** (optional) — a clickable path bar showing the
-  active shell's current directory, letting you jump to an ancestor
-  directory or browse into a subdirectory, with long paths collapsing to
-  an ellipsis when they don't fit
-- **Live-resizing size HUD** — a brief "cols × rows" overlay while dragging
-  the window to resize
-- **Scrollback with a real scrollbar** — mouse-wheel scrolling through
-  history with a macOS-style overlay scrollbar
-- **Native app bundle** — a proper signed `.app` with its own icon and menu
-  bar, not just a bare binary
+- **Windows Terminal-style tabs** — custom-drawn tabs with dividers, hover and active states, scrollable overflow with edge chevrons, and clickable close buttons. New tabs open in the login shell; the active tab shows its directory and, when applicable, the foreground process
+- **Native macOS app** — native titlebar and menu bar, an AppKit right-click menu with Copy and Paste, and a `.app` bundle with its own icon (ad-hoc signed, not notarized)
+- **Color themes** — eight built-ins: Campbell, One Half Dark/Light, Dracula, Tokyo Night, Catppuccin Mocha, and Solarized Dark/Light. Add your own TOML themes in `~/Library/Application Support/Coast/themes/`, or import a macOS Terminal.app `.terminal` file from the settings page
+- **Settings in their own tab** — appearance, UI zoom, font family/size/line spacing, cursor shape/blink/color (native color picker), initial columns and rows, scrollback length, tab-close confirmation, and breadcrumb options. Changes apply live and are saved to disk after a short pause; controls support Tab, arrow-key, Enter/Space and Escape navigation
+- **Directory breadcrumb** — an optional clickable path bar that shows the shell's current directory, jumps to an ancestor, or browses into a subdirectory. Long paths collapse to an ellipsis
+- **Terminal behavior** — 16 ANSI colors, 256 colors and truecolor; bold, italic, underline, strikethrough and wide characters; bracketed paste; application cursor keys; mouse-wheel scrollback with a macOS-style auto-hiding overlay scrollbar
+- **Selection and copy/paste** — drag, double-click word, and triple-click line selection; the native context menu offers Copy when text is selected and Paste when the clipboard holds text
+- **Session restore** — open tabs are saved and restored between launches
+- **Resize HUD** — a brief `cols × rows` overlay whenever the terminal grid is resized
 
-## Building
+## Install
 
-Requires Rust (stable) and Xcode command line tools, on macOS.
+There is no installer or prebuilt release yet; building from source is the supported path.
+
+Requirements:
+
+- macOS 12 or later
+- Stable Rust and the Xcode command line tools
+
+Build and run the debug binary:
 
 ```bash
-# Build and run the debug binary directly
 cargo build -p coast
 ./target/debug/coast
+```
 
-# Build a release .app bundle
+Build a release `.app` bundle and launch it:
+
+```bash
 ./build.sh
 open target/release/bundle/Coast.app
 ```
 
-`cargo test` runs the test suite across all crates.
+`./build.sh` produces `target/release/bundle/Coast.app`. For a debug bundle instead, run `packaging/macos/bundle.sh debug`, then open `target/debug/bundle/Coast.app`.
+
+Run the test suite with `cargo test`.
+
+## Keyboard shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| `Cmd-,` | Open Settings |
+| `Cmd-T` / `Cmd-W` | New tab / Close tab |
+| `Ctrl-Tab` / `Ctrl-Shift-Tab` | Next / previous tab |
+| `Cmd-C` / `Cmd-V` | Copy / Paste |
+| `Cmd-M` | Minimize |
+| `Ctrl-Cmd-F` | Enter full screen |
+| `Cmd-H` / `Cmd-Alt-H` | Hide Coast / Hide Others |
+| `Cmd-Q` | Quit |
+
+Closing a tab asks for confirmation when it is the last tab or has a foreground process.
+
+## Configuration
+
+User data lives under `~/Library/Application Support/Coast/`:
+
+- `config.toml` — settings
+- `themes/`, `chrome-themes/`, `breadcrumb-themes/` — user color, titlebar and breadcrumb themes
+- `session.toml` — saved tabs
 
 ## Project layout
 
-- `crates/coast` — the application: window/tab management, terminal
-  rendering, and the settings UI
-- `crates/terminal-core` — the PTY/`alacritty_terminal` session layer
-- `crates/themes` — color theme definitions and `.terminal` file import
-- `crates/settings` — user settings, loaded from and saved to
-  `~/Library/Application Support/Coast/config.toml`
+- `crates/coast` — the application: window and tab management, terminal rendering, settings UI
+- `crates/terminal-core` — the PTY and `alacritty_terminal` session layer
+- `crates/themes` — built-in themes and `.terminal` import
+- `crates/settings` — settings loading and saving
 
 ## Author
 
@@ -70,5 +81,4 @@ Built by Russell Dickenson with [Claude](https://claude.com/claude-code).
 
 ## License
 
-Coast is licensed under the [GNU General Public License v3.0](LICENSE) or
-later.
+Coast is licensed under the [GNU General Public License v3.0](LICENSE) or later.
