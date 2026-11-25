@@ -118,6 +118,11 @@ pub struct Session {
     shell_pid: Option<libc::pid_t>,
     events: Mutex<mpsc::Receiver<SessionEvent>>,
     dims: Mutex<(u16, u16)>,
+    /// Selection style of the active drag, and the cell it started on.
+    /// Simple drags track cells inclusively, so both ends need ordering
+    /// independent of which way the pointer moved.
+    selection_kind: Mutex<SelectionKind>,
+    selection_anchor: Mutex<Option<Point>>,
 }
 
 impl Session {
@@ -221,6 +226,8 @@ impl Session {
             shell_pid,
             events: Mutex::new(events),
             dims: Mutex::new((opts.cols, opts.rows)),
+            selection_kind: Mutex::new(SelectionKind::Simple),
+            selection_anchor: Mutex::new(None),
         })
     }
 
@@ -403,7 +410,21 @@ impl Session {
                 SelectionKind::Word => SelectionType::Semantic,
                 SelectionKind::Line => SelectionType::Lines,
             };
-            term.selection = Some(Selection::new(ty, point, side(right_half)));
+            // For a character drag, include the cell under the pointer:
+            // splitting cells in half makes the first (often punctuation)
+            // cell vanish whenever the press lands in its right half.
+            let start_side = if kind == SelectionKind::Simple {
+                Side::Left
+            } else {
+                side(right_half)
+            };
+            term.selection = Some(Selection::new(ty, point, start_side));
+            if let Ok(mut anchor) = self.selection_anchor.lock() {
+                *anchor = Some(point);
+            }
+            if let Ok(mut selection_kind) = self.selection_kind.lock() {
+                *selection_kind = kind;
+            }
         }
     }
 
@@ -411,7 +432,20 @@ impl Session {
     pub fn update_selection(&self, col: usize, row: usize, right_half: bool) {
         if let Ok(mut term) = self.term.lock() {
             let point = viewport_point(&term, col, row);
-            if let Some(selection) = term.selection.as_mut() {
+            let kind = self
+                .selection_kind
+                .lock()
+                .map(|guard| *guard)
+                .unwrap_or(SelectionKind::Simple);
+            if kind == SelectionKind::Simple {
+                let anchor = self
+                    .selection_anchor
+                    .lock()
+                    .ok()
+                    .and_then(|guard| *guard)
+                    .unwrap_or(point);
+                term.selection = Some(simple_selection(anchor, point));
+            } else if let Some(selection) = term.selection.as_mut() {
                 selection.update(point, side(right_half));
             }
         }
@@ -422,6 +456,9 @@ impl Session {
             if term.selection.is_some() {
                 term.selection = None;
             }
+        }
+        if let Ok(mut anchor) = self.selection_anchor.lock() {
+            *anchor = None;
         }
     }
 
@@ -459,6 +496,20 @@ fn side(right_half: bool) -> Side {
     } else {
         Side::Left
     }
+}
+
+/// A simple selection spanning every cell between `anchor` and `point`,
+/// whichever way the drag went. alacritty's half-cell sides would otherwise
+/// drop the first cell (and, for a backwards drag, the last one too).
+fn simple_selection(anchor: Point, point: Point) -> Selection {
+    let (start, end) = if point < anchor {
+        (point, anchor)
+    } else {
+        (anchor, point)
+    };
+    let mut selection = Selection::new(SelectionType::Simple, start, Side::Left);
+    selection.update(end, Side::Right);
+    selection
 }
 
 /// Map a viewport cell to a grid point, accounting for scrollback offset.
@@ -687,5 +738,21 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn simple_selection_includes_both_end_cells_in_either_direction() {
+        use alacritty_terminal::term::test::mock_term;
+
+        let mut term = mock_term("_foo_");
+        let first = Point::new(Line(0), Column(0));
+        let last = Point::new(Line(0), Column(4));
+
+        term.selection = Some(simple_selection(first, last));
+        assert_eq!(term.selection_to_string().as_deref(), Some("_foo_"));
+
+        // Dragging back the other way must include the same cells.
+        term.selection = Some(simple_selection(last, first));
+        assert_eq!(term.selection_to_string().as_deref(), Some("_foo_"));
     }
 }
